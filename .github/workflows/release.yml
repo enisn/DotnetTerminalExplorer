@@ -68,6 +68,7 @@ jobs:
           echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Publish Native AOT
+        shell: bash
         run: |
           dotnet publish src/DotnetTerminalExplorer \
             -c Release \
@@ -94,6 +95,7 @@ jobs:
 
       - name: Ad-hoc Code Sign (macOS)
         if: runner.os == 'macOS'
+        shell: bash
         run: |
           codesign -s - --force --deep ./dist/dte
 
