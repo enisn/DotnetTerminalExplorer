@@ -2,14 +2,36 @@
 
 using System.Drawing;
 using DotnetTerminalExplorer.Core;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using TuiAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace DotnetTerminalExplorer;
 
 internal sealed class ExplorerWindow : Window
 {
+    private static readonly TuiAttribute PreviewContentAttribute =
+        new(ColorName16.White, ColorName16.Black);
+
+    private static readonly TuiAttribute PreviewSelectionAttribute =
+        new(ColorName16.Black, ColorName16.White);
+
+    private static readonly Scheme PreviewColorScheme = new()
+    {
+        Normal = PreviewContentAttribute,
+        HotNormal = PreviewContentAttribute,
+        Focus = PreviewContentAttribute,
+        HotFocus = PreviewContentAttribute,
+        Active = PreviewSelectionAttribute,
+        HotActive = PreviewSelectionAttribute,
+        Highlight = PreviewSelectionAttribute,
+        Editable = PreviewContentAttribute,
+        ReadOnly = PreviewContentAttribute,
+        Disabled = PreviewContentAttribute,
+    };
+
     private readonly IDefaultFileLauncher _launcher;
     private readonly ITextPreviewService _previewService;
 
@@ -70,6 +92,7 @@ internal sealed class ExplorerWindow : Window
             ScrollBars = true,
             Text = TextPreview.ForDirectory().Text,
         };
+        Preview.SetScheme(PreviewColorScheme);
 
         FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
 

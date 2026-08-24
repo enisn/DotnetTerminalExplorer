@@ -1,8 +1,10 @@
 #pragma warning disable CS0618 // The production preview intentionally uses Terminal.Gui TextView.
 
 using DotnetTerminalExplorer.Core;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
+using TuiAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace DotnetTerminalExplorer.Tests;
 
@@ -38,6 +40,44 @@ public sealed class ExplorerWindowTests
         window.FileTree.SelectedObject = tree.Root;
 
         Assert.False(window.EditShortcut.Enabled);
+    }
+
+    [Fact]
+    public void Preview_UsesHighContrastAnsi16ColorsForEveryTextState()
+    {
+        using var window = CreateWindow(new FakeFileTreeService());
+        var expectedContent = new TuiAttribute(ColorName16.White, ColorName16.Black);
+        var expectedSelection = new TuiAttribute(ColorName16.Black, ColorName16.White);
+
+        Assert.Equal(expectedContent, window.Preview.GetAttributeForRole(VisualRole.Normal));
+        Assert.Equal(expectedContent, window.Preview.GetAttributeForRole(VisualRole.Editable));
+        Assert.Equal(expectedContent, window.Preview.GetAttributeForRole(VisualRole.ReadOnly));
+        Assert.Equal(expectedContent, window.Preview.GetAttributeForRole(VisualRole.Disabled));
+        Assert.Equal(expectedSelection, window.Preview.GetAttributeForRole(VisualRole.Active));
+        Assert.Equal(expectedSelection, window.Preview.GetAttributeForRole(VisualRole.Highlight));
+
+        VisualRole[] previewTextRoles =
+        [
+            VisualRole.Normal,
+            VisualRole.HotNormal,
+            VisualRole.Focus,
+            VisualRole.HotFocus,
+            VisualRole.Active,
+            VisualRole.HotActive,
+            VisualRole.Highlight,
+            VisualRole.Editable,
+            VisualRole.ReadOnly,
+            VisualRole.Disabled,
+        ];
+
+        foreach (var role in previewTextRoles)
+        {
+            var attribute = window.Preview.GetAttributeForRole(role);
+
+            Assert.NotEqual(
+                attribute.Foreground.GetClosestNamedColor16(),
+                attribute.Background.GetClosestNamedColor16());
+        }
     }
 
     [Fact]

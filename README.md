@@ -2,6 +2,8 @@
 
 Dotnet Terminal Explorer (`dte`) is a deliberately lightweight, scoped file explorer for the terminal. It opens a filesystem tree on the left and a read-only text preview on the right.
 
+![Dotnet Terminal Explorer showing the filesystem tree and text preview](docs/images/dotnet-terminal-explorer.png)
+
 `dte` explores only the directory passed to it, similar to opening a folder with `code`. If the directory is omitted, it uses the current working directory.
 
 ## Requirements
