@@ -52,7 +52,7 @@ internal static class FilePreviewHelper
             }
         }
 
-        if (FileTypeClassifier.IsBinaryFile(entry.FullPath))
+        if (!forceLoad && FileTypeClassifier.IsBinaryFile(entry.FullPath))
         {
             try
             {
@@ -69,6 +69,7 @@ internal static class FilePreviewHelper
                         Last Modified: {fileInfo.LastWriteTime:yyyy-MM-dd HH:mm:ss}
 
                         Press F8 to open with external application.
+                        Press Ctrl+L to load as text.
                         """;
                     return TextPreview.ForBinary(summary);
                 }

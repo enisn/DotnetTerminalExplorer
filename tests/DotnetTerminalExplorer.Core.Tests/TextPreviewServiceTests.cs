@@ -77,6 +77,21 @@ public sealed class TextPreviewServiceTests
         Assert.Contains("[Binary File]", result.Text);
         Assert.Contains("program.bin", result.Text);
         Assert.Contains("F8", result.Text);
+        Assert.Contains("Ctrl+L", result.Text);
+    }
+
+    [Fact]
+    public void Read_LoadsBinaryFileWhenForced()
+    {
+        using var directory = new TemporaryDirectory();
+        var binPath = Path.Combine(directory.Path, "program.bin");
+        System.IO.File.WriteAllBytes(binPath, [0x00, 0x01, 0x02, 0x03]);
+        var service = new TextPreviewService(_ => "raw binary text content");
+
+        var result = service.Read(Entry(binPath), forceLoad: true);
+
+        Assert.Equal(TextPreviewKind.Content, result.Kind);
+        Assert.Equal("raw binary text content", result.Text);
     }
 
     [Fact]

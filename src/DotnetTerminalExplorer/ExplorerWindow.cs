@@ -1014,7 +1014,7 @@ internal sealed class ExplorerWindow : Window
             "  F2                Rename the selected file or directory inline\n" +
             "  Del               Delete the selected file or directory\n" +
             "  F5                Reload the selected file from disk\n" +
-            "  Ctrl+L            Load a large file (> 2 MB) on demand\n" +
+            "  Ctrl+L            Load a large (> 2 MB) or binary file as text on demand\n" +
             "  F8                Open selected file with default OS application\n\n" +
             "General:\n" +
             "  F1                Show this help dialog\n" +
@@ -1213,13 +1213,13 @@ internal sealed class ExplorerWindow : Window
     {
         var isFile = _loadedEntry is { Kind: FileSystemEntryKind.File };
         var isEditableText = isFile && _previewService is ITextFileService && !Preview.ReadOnly && Preview.Visible;
-        var isTooLargePreview = isFile && _previewKind == TextPreviewKind.TooLarge;
+        var isLoadablePreview = isFile && (_previewKind == TextPreviewKind.TooLarge || _previewKind == TextPreviewKind.Binary);
         var hasNonRootSelection = FileTree.SelectedObject is { } selection
             && selection != _fileTreeService.Root
             && selection.Kind != FileSystemEntryKind.LoadMore;
         EditShortcut.Enabled = isFile;
         SaveShortcut.Enabled = isEditableText;
-        LoadShortcut.Enabled = isTooLargePreview;
+        LoadShortcut.Enabled = isLoadablePreview;
         RenameShortcut.Enabled = hasNonRootSelection;
         DeleteShortcut.Enabled = hasNonRootSelection;
         NewFileShortcut.Enabled = true;

@@ -94,7 +94,7 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `Alt+Right` / `Alt+]` | Expand the left Files panel width |
 | `F5` | Reload the selected file |
 | `Ctrl+S` | Save changes to the active file |
-| `Ctrl+L` | Load a large file that was skipped automatically |
+| `Ctrl+L` | Load a large or binary file as text on demand |
 | `Ctrl+N` | Create a new file in the selected directory |
 | `Right` / `Ctrl+Right` | Expand the selected directory (one level) |
 | `F2` | Rename the selected file or directory inline |
@@ -112,7 +112,7 @@ Note: some terminals encode `Ctrl+H` as `0x08` (historic backspace), which reach
 
 On ultra-wide terminals, the left file panel is automatically clamped (to 24–48 columns by default) to keep the preview pane spacious. You can manually adjust the width at any time with `Alt+Left` / `Alt+Right` (or `Alt+[` / `Alt+]`).
 
-File previews load asynchronously so navigating the tree never blocks. Files larger than 2 MB are not read automatically; the preview shows file metadata instead and `Ctrl+L` loads them on demand.
+File previews load asynchronously so navigating the tree never blocks. Binary files and files larger than 2 MB are not read automatically; the preview shows file metadata instead and `Ctrl+L` loads them as text on demand.
 
 Very large directories are paged (500 entries per page by default, configurable via `--page-size`): the next page loads automatically as the selection approaches the end of the loaded items, and a `── Load more…` row is available for explicit jumps to the bottom. `Ctrl+Right` expands one level at a time (recursive expand-all is disabled so huge trees never freeze the UI).
 

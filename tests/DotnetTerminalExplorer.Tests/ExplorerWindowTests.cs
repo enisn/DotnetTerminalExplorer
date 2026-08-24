@@ -844,10 +844,51 @@ public sealed class ExplorerWindowTests
         Assert.False(window.ImagePreview.Visible);
         Assert.True(window.Preview.Visible);
         Assert.True(window.Preview.ReadOnly);
+        Assert.True(window.LoadShortcut.Enabled);
         Assert.False(window.SaveShortcut.Enabled);
         Assert.True(window.EditShortcut.Enabled);
         Assert.Equal("[Binary File]", window.Preview.Text);
         Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void LoadShortcut_ForceLoadsBinaryFileAndEnablesEditing()
+    {
+        var tree = new FakeFileTreeService();
+        var binEntry = new FileSystemEntry("/scope/app.dll", "app.dll", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.ForBinary("[Binary File]");
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = binEntry;
+
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.FromContent("binary as text");
+        window.LoadShortcut.Action!.Invoke();
+
+        Assert.Equal("binary as text", window.Preview.Text);
+        Assert.False(window.Preview.ReadOnly);
+        Assert.False(window.LoadShortcut.Enabled);
+        Assert.True(window.SaveShortcut.Enabled);
+        Assert.Equal([binEntry.FullPath], preview.ForcedReadPaths);
+        Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void ReloadShortcut_ReloadsForcedBinaryFilesWithoutAskingAgain()
+    {
+        var tree = new FakeFileTreeService();
+        var binEntry = new FileSystemEntry("/scope/app.dll", "app.dll", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.ForBinary("[Binary File]");
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = binEntry;
+
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.FromContent("binary as text");
+        window.LoadShortcut.Action!.Invoke();
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.FromContent("reloaded binary text");
+        window.ReloadShortcut.Action!.Invoke();
+
+        Assert.Equal("reloaded binary text", window.Preview.Text);
+        Assert.Equal(2, preview.ForcedReadPaths.Count(path => path == binEntry.FullPath));
     }
 
     [Fact]
