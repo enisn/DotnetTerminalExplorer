@@ -9,13 +9,16 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>dte</ToolCommandName>
     <PackageId>DotnetTerminalExplorer</PackageId>
+    <Title>Dotnet Terminal Explorer</Title>
     <PackageOutputPath>../../nupkg</PackageOutputPath>
 
     <Authors>enisn</Authors>
     <Description>A lightweight file explorer for the terminal.</Description>
     <PackageTags>dotnet-tool;terminal;tui;file-explorer</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/enisn/DotnetTerminalExplorer</PackageProjectUrl>
     <RepositoryUrl>https://github.com/enisn/DotnetTerminalExplorer</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
@@ -36,4 +39,3 @@
     <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>
-

@@ -76,6 +76,20 @@ public sealed class ExplorerCommandLineTests
         Assert.Contains("does not exist or is not a directory", console.ReadErrorString());
     }
 
+    [Fact]
+    public async Task FilePath_ReturnsUsageExitCode()
+    {
+        using var directory = new TemporaryDirectory();
+        using var console = new FakeInMemoryConsole();
+        var file = directory.CreateFile("file.txt", "content");
+        var application = ExplorerCommandLine.Create(_ => { }, console);
+
+        var exitCode = await application.RunAsync([file]);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("does not exist or is not a directory", console.ReadErrorString());
+    }
+
     [Theory]
     [InlineData("one", "two")]
     [InlineData("--unknown")]

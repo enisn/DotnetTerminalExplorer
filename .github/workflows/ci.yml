@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    runs-on: ubuntu-latest
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore DotnetTerminalExplorer.sln
+
+      - name: Build
+        run: dotnet build DotnetTerminalExplorer.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test DotnetTerminalExplorer.sln --configuration Release --no-build --no-restore
+
+      - name: Pack
+        run: >-
+          dotnet pack src/DotnetTerminalExplorer/DotnetTerminalExplorer.csproj
+          --configuration Release
+          --no-build
+          --include-symbols
+          --include-source
+          --output nupkg
+
+      - name: Install packed tool in isolation
+        run: >-
+          dotnet tool install DotnetTerminalExplorer
+          --tool-path artifacts/tool
+          --add-source nupkg
+          --version 0.1.0
+          --ignore-failed-sources
+
+      - name: Verify tool metadata paths
+        run: |
+          artifacts/tool/dte --help
+          artifacts/tool/dte --version
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: DotnetTerminalExplorer-packages
+          path: |
+            nupkg/*.nupkg
+            nupkg/*.snupkg
+          if-no-files-found: error
