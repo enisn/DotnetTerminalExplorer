@@ -38,6 +38,29 @@ dotnet tool install --global DotnetTerminalExplorer
 
 ---
 
+## Uninstallation
+
+### Standalone Native Binary
+
+#### Linux & macOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/enisn/DotnetTerminalExplorer/main/uninstall.sh | bash
+```
+*(Or simply remove `~/.local/bin/dte`)*
+
+#### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/enisn/DotnetTerminalExplorer/main/uninstall.ps1 | iex
+```
+*(Or remove the `$HOME\.dte` folder)*
+
+### .NET Global Tool
+```shell
+dotnet tool uninstall --global DotnetTerminalExplorer
+```
+
+---
+
 ## Usage
 
 Run it for the current directory or a specific scoped folder:

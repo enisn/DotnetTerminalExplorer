@@ -52,6 +52,27 @@ if [ "$OS" = "osx" ] && [ "$ARCH" = "x64" ]; then
     print_error_and_fallback "macOS on Intel (x86_64) is not available as a standalone binary."
 fi
 
+# 3. Check glibc version on Linux
+if [ "$OS" = "linux" ]; then
+    GLIBC_VER=""
+    if command -v getconf >/dev/null 2>&1; then
+        GLIBC_VER="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $NF}')"
+    fi
+    if [ -z "$GLIBC_VER" ] && command -v ldd >/dev/null 2>&1; then
+        GLIBC_VER="$(ldd --version 2>&1 | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1)"
+    fi
+
+    if [ -n "$GLIBC_VER" ]; then
+        GLIBC_MAJOR="$(echo "$GLIBC_VER" | cut -d. -f1)"
+        GLIBC_MINOR="$(echo "$GLIBC_VER" | cut -d. -f2)"
+
+        # Minimum required glibc version (2.34)
+        if [ "$GLIBC_MAJOR" -lt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -lt 34 ]; }; then
+            print_error_and_fallback "Your system glibc ($GLIBC_VER) is older than required (>= 2.34)."
+        fi
+    fi
+fi
+
 # 3. Determine Installation Directory
 if [ -z "$INSTALL_DIR" ]; then
     if [ "$(id -u)" -eq 0 ]; then
