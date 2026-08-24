@@ -83,7 +83,10 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | Shortcut | Action |
 | --- | --- |
 | `F1` | Show the Keyboard Shortcuts & Help dialog |
+| `Enter` | Expand directory / Focus editor for text files (when tree focused) |
+| `Tab` | Switch focus between Files tree and Preview editor |
 | `Ctrl+F` / `F3` | Find in active file (if editor focused) or Workspace Search (if tree focused) |
+| `Ctrl+H` | Find & Replace in active file (if editor focused) |
 | `Ctrl+Shift+F` | Workspace Search across all files (Ripgrep speed) |
 | `F3` / `Enter` | Next match in find bar |
 | `Shift+F3` / `Shift+Enter` | Previous match in find bar |
@@ -97,11 +100,15 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `F2` | Rename the selected file or directory inline |
 | `Del` | Delete the selected file or directory (asks for confirmation) |
 | `F8` | Open the selected file with the operating system's default application |
-| `Esc` | Quit (or cancel inline input / dialog) |
+| `Esc` | Return to file tree (if editor focused) / Quit with confirmation (if tree focused) |
 
 `Ctrl+F` / `F3` is context-aware: pressing it while focused on the editor opens an in-editor find bar with instant match navigation (`Enter`/`F3` for next, `Shift+Enter`/`Shift+F3` for previous, `Alt+C` for case sensitivity); pressing it while focused on the file tree (or pressing `Ctrl+Shift+F` anytime) opens a ripgrep-grade workspace search modal streaming matches asynchronously across the repository with GitIgnore filtering, regex support, and file/content mode toggles.
 
-`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory after confirming in a modal dialog. Press `F1` at any time to open the full help dialog.
+While the in-editor find bar is open, press `Ctrl+H` or `Alt+R` (or click the `Replace` button on the right of the find bar) to reveal the replace field (`Tab` / `Shift+Tab` switches between the Find and Replace inputs). `Enter` in the replace field replaces the current match and advances to the next one, `Ctrl+Enter` replaces all occurrences at once, and `Alt+C` toggles case sensitivity for both find and replace. Replace actions show a read-only hint for non-editable previews; save the file with `Ctrl+S` afterwards.
+
+Note: some terminals encode `Ctrl+H` as `0x08` (historic backspace), which reaches the app as `Ctrl+Backspace`. Both encodings are intercepted before the editor's word-delete binding, so `Ctrl+H` opens the replace bar in either case.
+
+`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Pressing `Enter` on a selected text file in the file tree automatically focuses the editor, and pressing `Esc` inside the editor immediately returns focus to the file tree. Pressing `Esc` while on the file tree prompts a confirmation dialog before quitting to prevent accidental exits. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory after confirming in a modal dialog. Press `F1` at any time to open the full help dialog.
 
 On ultra-wide terminals, the left file panel is automatically clamped (to 24–48 columns by default) to keep the preview pane spacious. You can manually adjust the width at any time with `Alt+Left` / `Alt+Right` (or `Alt+[` / `Alt+]`).
 

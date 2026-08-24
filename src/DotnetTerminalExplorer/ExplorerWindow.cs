@@ -44,7 +44,9 @@ internal sealed class ExplorerWindow : Window
     private readonly IFileMutationService _mutationService;
     private readonly ISearchService _searchService;
     private readonly Func<FileSystemEntry, bool> _confirmDelete;
+    private readonly Func<bool> _confirmExit;
     private readonly Action _showHelp;
+    private readonly Action _requestStop;
     private readonly IApplication? _application;
 
     private int? _customLeftPaneWidth;
@@ -55,6 +57,7 @@ internal sealed class ExplorerWindow : Window
     private int _previewLoadVersion;
     private TextPreviewKind? _previewKind;
     private bool _advancingLoadMore;
+    private bool _focusEditorOnLoaded;
     private readonly HashSet<string> _forcedPreviewPaths = new(StringComparer.Ordinal);
 
     public ExplorerWindow(
@@ -66,7 +69,8 @@ internal sealed class ExplorerWindow : Window
         Func<FileSystemEntry, bool>? confirmDelete = null,
         Action? showHelp = null,
         IApplication? application = null,
-        ISearchService? searchService = null)
+        ISearchService? searchService = null,
+        Func<bool>? confirmExit = null)
     {
         ArgumentNullException.ThrowIfNull(fileTree);
         ArgumentNullException.ThrowIfNull(previewService);
@@ -76,9 +80,11 @@ internal sealed class ExplorerWindow : Window
         _fileTreeService = fileTree;
         _previewService = previewService;
         _launcher = launcher;
+        _requestStop = requestStop;
         _mutationService = mutationService ?? new FileMutationService();
         _searchService = searchService ?? new FastSearchEngine();
         _confirmDelete = confirmDelete ?? ConfirmDeleteViaMessageBox;
+        _confirmExit = confirmExit ?? ConfirmExitViaMessageBox;
         _showHelp = showHelp ?? ShowHelpViaDialog;
         _application = application;
 
@@ -88,7 +94,7 @@ internal sealed class ExplorerWindow : Window
         Width = Dim.Fill();
         Height = Dim.Fill();
 
-        StatusBar = CreateStatusBar(requestStop);
+        StatusBar = CreateStatusBar();
         FileTreePane = new FrameView
         {
             Title = "Files",
@@ -158,13 +164,24 @@ internal sealed class ExplorerWindow : Window
         FindBar = new EditorFindBar(Preview)
         {
             X = 0,
-            Y = Pos.AnchorEnd(1),
             Visible = false,
         };
         FindBar.OnClose = () => Preview.SetFocus();
 
         FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
         Preview.ContentsChanged += (_, _) => UpdatePreviewTitle();
+
+        // Ctrl+H must open the replace bar even though TextView binds it (and terminals
+        // that encode Ctrl+H as 0x08 deliver it as Ctrl+Backspace) to word-delete.
+        // A KeyDown subscriber runs before the built-in key bindings, so intercept here.
+        Preview.KeyDown += (sender, keyEvent) =>
+        {
+            if (EditorFindBar.IsReplaceShortcut(keyEvent))
+            {
+                TriggerContextAwareReplace();
+                keyEvent.Handled = true;
+            }
+        };
 
         KeyDown += (sender, keyEvent) =>
         {
@@ -200,6 +217,11 @@ internal sealed class ExplorerWindow : Window
                 {
                     TriggerContextAwareSearch();
                 }
+                keyEvent.Handled = true;
+            }
+            else if (EditorFindBar.IsReplaceShortcut(keyEvent))
+            {
+                TriggerContextAwareReplace();
                 keyEvent.Handled = true;
             }
             else if (keyEvent == Key.F.WithCtrl.WithShift)
@@ -258,6 +280,41 @@ internal sealed class ExplorerWindow : Window
             else if (keyEvent == Key.Esc)
             {
                 CancelCreate();
+                keyEvent.Handled = true;
+            }
+        };
+
+        FileTree.KeyDown += (sender, keyEvent) =>
+        {
+            if (keyEvent == Key.Enter)
+            {
+                var selected = FileTree.SelectedObject;
+                if (selected is { Kind: FileSystemEntryKind.File })
+                {
+                    if (_previewKind == TextPreviewKind.Content && Preview.Visible && !Preview.ReadOnly)
+                    {
+                        Preview.SetFocus();
+                        keyEvent.Handled = true;
+                    }
+                    else if (_previewKind is null && _loadedEntry == selected)
+                    {
+                        _focusEditorOnLoaded = true;
+                        keyEvent.Handled = true;
+                    }
+                }
+            }
+            else if (keyEvent == Key.Esc)
+            {
+                RequestExit();
+                keyEvent.Handled = true;
+            }
+        };
+
+        Preview.KeyDown += (sender, keyEvent) =>
+        {
+            if (keyEvent == Key.Esc)
+            {
+                FileTree.SetFocus();
                 keyEvent.Handled = true;
             }
         };
@@ -381,7 +438,7 @@ internal sealed class ExplorerWindow : Window
         _showHelp();
     }
 
-    private StatusBar CreateStatusBar(Action requestStop)
+    private StatusBar CreateStatusBar()
     {
         HelpShortcut = new Shortcut(Key.F1, "Help", ShowHelp)
         {
@@ -424,7 +481,7 @@ internal sealed class ExplorerWindow : Window
             BindKeyToApplication = true,
             Enabled = false,
         };
-        QuitShortcut = new Shortcut(Key.Esc, "Quit", requestStop)
+        QuitShortcut = new Shortcut(Key.Esc, "Quit", RequestExit)
         {
             BindKeyToApplication = true,
         };
@@ -487,6 +544,7 @@ internal sealed class ExplorerWindow : Window
         _loadedEntry = entry;
         _previewLoadVersion++;
         _previewKind = null;
+        _focusEditorOnLoaded = false;
         FindBar.Reset();
 
         if (entry is { Kind: FileSystemEntryKind.LoadMore })
@@ -633,6 +691,15 @@ internal sealed class ExplorerWindow : Window
             _savedContent = preview.Kind == TextPreviewKind.Content ? preview.Text : string.Empty;
             Preview.ReadOnly = preview.Kind != TextPreviewKind.Content;
             ShowPreview(preview.Text);
+        }
+
+        if (_focusEditorOnLoaded)
+        {
+            _focusEditorOnLoaded = false;
+            if (preview.Kind == TextPreviewKind.Content && Preview.Visible && !Preview.ReadOnly)
+            {
+                Preview.SetFocus();
+            }
         }
 
         UpdatePreviewTitle();
@@ -863,6 +930,35 @@ internal sealed class ExplorerWindow : Window
         }
     }
 
+    public void RequestExit()
+    {
+        if (_confirmExit())
+        {
+            _requestStop();
+        }
+        else
+        {
+            FileTree.SetFocus();
+        }
+    }
+
+    private bool ConfirmExitViaMessageBox()
+    {
+        if (_application is null)
+        {
+            // No application instance is available (unit tests); proceed without a modal.
+            return true;
+        }
+
+        var choice = MessageBox.Query(
+            _application,
+            "Quit",
+            "Are you sure you want to quit?",
+            "Quit",
+            "Cancel");
+        return choice == 0;
+    }
+
     private bool ConfirmDeleteViaMessageBox(FileSystemEntry entry)
     {
         if (_application is null)
@@ -897,13 +993,19 @@ internal sealed class ExplorerWindow : Window
             "  Tab               Switch focus between Files tree and Preview pane\n" +
             "  Alt+Left / Alt+[  Shrink the left Files panel\n" +
             "  Alt+Right / Alt+] Expand the left Files panel\n" +
-            "  Up / Down / Enter Navigate directories and select files\n" +
+            "  Up / Down         Navigate directories and select files\n" +
+            "  Enter             Expand directory / Focus editor for text files\n" +
             "  Right / Ctrl+Right Expand the selected directory (one level)\n\n" +
-            "Search:\n" +
+            "Search & Replace:\n" +
             "  Ctrl+F / F3       Find in active file (if editor focused) or Workspace Search (if tree focused)\n" +
             "  Ctrl+Shift+F      Workspace Search across all files (Ripgrep speed)\n" +
             "  F3 / Enter        Next match in find bar\n" +
-            "  Shift+F3 / S-Ent  Previous match in find bar\n\n" +
+            "  Shift+F3 / S-Ent  Previous match in find bar\n" +
+            "  Ctrl+H            Find & replace in active file (if editor focused)\n" +
+            "  Alt+R / Replace btn Show/hide replace field (Tab switches inputs)\n" +
+            "  Enter (replace)   Replace current match and advance\n" +
+            "  Ctrl+Enter        Replace all matches\n" +
+            "  Alt+C             Toggle case sensitivity in find bar\n\n" +
             "File Operations:\n" +
             "  Ctrl+S            Save modifications to the active file\n" +
             "  Ctrl+N            Create a new file in the selected directory\n" +
@@ -914,13 +1016,13 @@ internal sealed class ExplorerWindow : Window
             "  F8                Open selected file with default OS application\n\n" +
             "General:\n" +
             "  F1                Show this help dialog\n" +
-            "  Esc               Quit application (or cancel inline input / dialog)\n";
+            "  Esc               Return to file tree (from editor) / Quit application with confirmation\n";
 
         var dialog = new Dialog
         {
             Title = "Keyboard Shortcuts & Help",
             Width = 84,
-            Height = 24,
+            Height = 38,
         };
 
         var label = new Label
@@ -957,6 +1059,20 @@ internal sealed class ExplorerWindow : Window
         if (isEditorFocused && _loadedEntry is { Kind: FileSystemEntryKind.File } && Preview.Visible)
         {
             FindBar.Open();
+        }
+        else
+        {
+            OpenWorkspaceSearch();
+        }
+    }
+
+    public void TriggerContextAwareReplace()
+    {
+        var isEditorFocused = Preview.HasFocus || FindBar.HasFocus
+            || FindBar.QueryInput.HasFocus || FindBar.ReplaceInput.HasFocus;
+        if (isEditorFocused && _loadedEntry is { Kind: FileSystemEntryKind.File } && Preview.Visible)
+        {
+            FindBar.Open(replaceMode: true);
         }
         else
         {

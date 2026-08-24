@@ -897,6 +897,67 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
+    public void TriggerContextAwareReplace_WhenEditorFocusedAndFileLoaded_OpensFindBarInReplaceMode()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "Sample file content";
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = tree.File;
+
+        window.Preview.SetFocus();
+
+        Assert.False(window.FindBar.Visible);
+        window.TriggerContextAwareReplace();
+
+        Assert.True(window.FindBar.Visible);
+        Assert.True(window.FindBar.IsReplaceMode);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Preview_CtrlH_OpensFindBarInReplaceMode_AndDoesNotDeleteWord(bool terminalEncodesCtrlHAsBackspace)
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "hello world";
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = tree.File;
+
+        window.Preview.SetFocus();
+
+        // Terminals that encode Ctrl+H as 0x08 deliver it as Ctrl+Backspace, which
+        // TextView binds to word-delete; the interception must pre-empt that binding.
+        var key = terminalEncodesCtrlHAsBackspace ? Key.Backspace.WithCtrl : Key.H.WithCtrl;
+        var handled = window.Preview.NewKeyDownEvent(key);
+
+        Assert.True(handled);
+        Assert.True(window.FindBar.Visible);
+        Assert.True(window.FindBar.IsReplaceMode);
+        Assert.Equal("hello world", window.Preview.Text);
+    }
+
+    [Fact]
+    public void ReplaceAll_InEditor_UpdatesTextAndMarksFileDirty()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "Sample file content";
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = tree.File;
+
+        window.FindBar.Open(replaceMode: true);
+        window.FindBar.QueryInput.Text = "Sample";
+        window.FindBar.ReplaceInput.Text = "Updated";
+        window.FindBar.ReplaceAll();
+
+        Assert.Equal("Updated file content", window.Preview.Text);
+        Assert.True(window.IsDirty);
+        Assert.EndsWith(" *", window.PreviewPane.Title);
+    }
+
+    [Fact]
     public void ChangingTreeSelection_DoesNotStealFocusToPreview()
     {
         var tree = new FakeFileTreeService();
@@ -946,6 +1007,173 @@ public sealed class ExplorerWindowTests
         Assert.Equal(nestedFile, window.FileTree.SelectedObject);
     }
 
+    [Fact]
+    public void EnterOnTree_WhenTextFileSelected_FocusesPreview()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "sample text";
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.FileTree.SetFocus();
+        Assert.True(window.FileTree.HasFocus);
+
+        window.FileTree.NewKeyDownEvent(Key.Enter);
+
+        Assert.True(window.Preview.HasFocus);
+    }
+
+    [Fact]
+    public void EnterOnTree_WhenDirectorySelected_DoesNotFocusPreview()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+        window.FileTree.SetFocus();
+
+        window.FileTree.NewKeyDownEvent(Key.Enter);
+
+        Assert.True(window.FileTree.HasFocus);
+        Assert.False(window.Preview.HasFocus);
+    }
+
+    [Fact]
+    public void EnterOnTree_WhenImageSelected_DoesNotFocusPreview()
+    {
+        var tree = new FakeFileTreeService();
+        var imageEntry = new FileSystemEntry("/scope/photo.png", "photo.png", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        preview.PreviewByPath[imageEntry.FullPath] = TextPreview.ForImage("Format: PNG");
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = imageEntry;
+        window.FileTree.SetFocus();
+
+        window.FileTree.NewKeyDownEvent(Key.Enter);
+
+        Assert.True(window.FileTree.HasFocus);
+        Assert.False(window.Preview.HasFocus);
+    }
+
+    [Fact]
+    public void EnterOnTree_WhenBinarySelected_DoesNotFocusPreview()
+    {
+        var tree = new FakeFileTreeService();
+        var binEntry = new FileSystemEntry("/scope/app.dll", "app.dll", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.ForBinary("[Binary File]");
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = binEntry;
+        window.FileTree.SetFocus();
+
+        window.FileTree.NewKeyDownEvent(Key.Enter);
+
+        Assert.True(window.FileTree.HasFocus);
+        Assert.False(window.Preview.HasFocus);
+    }
+
+    [Fact]
+    public void EnterOnTree_WhenTooLargeFileSelected_DoesNotFocusPreview()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.ForTooLarge("File is too large.");
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.FileTree.SetFocus();
+
+        window.FileTree.NewKeyDownEvent(Key.Enter);
+
+        Assert.True(window.FileTree.HasFocus);
+        Assert.False(window.Preview.HasFocus);
+    }
+
+    [Fact]
+    public void EscOnPreview_ReturnsFocusToFileTreeAndDoesNotQuit()
+    {
+        var quitInvocations = 0;
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree, requestStop: () => quitInvocations++);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.Preview.SetFocus();
+        Assert.True(window.Preview.HasFocus);
+
+        window.Preview.NewKeyDownEvent(Key.Esc);
+
+        Assert.True(window.FileTree.HasFocus);
+        Assert.Equal(0, quitInvocations);
+    }
+
+    [Fact]
+    public void EscOnTree_WhenConfirmationAccepted_RequestsStop()
+    {
+        var quitInvocations = 0;
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(
+            tree,
+            requestStop: () => quitInvocations++,
+            confirmExit: () => true);
+
+        window.FileTree.SetFocus();
+        window.FileTree.NewKeyDownEvent(Key.Esc);
+
+        Assert.Equal(1, quitInvocations);
+    }
+
+    [Fact]
+    public void EscOnTree_WhenConfirmationDeclined_DoesNotRequestStopAndKeepsTreeFocused()
+    {
+        var quitInvocations = 0;
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(
+            tree,
+            requestStop: () => quitInvocations++,
+            confirmExit: () => false);
+
+        window.FileTree.SetFocus();
+        window.FileTree.NewKeyDownEvent(Key.Esc);
+
+        Assert.Equal(0, quitInvocations);
+        Assert.True(window.FileTree.HasFocus);
+    }
+
+    [Fact]
+    public void RequestExit_WhenConfirmed_InvokesRequestStop()
+    {
+        var quitInvocations = 0;
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(
+            tree,
+            requestStop: () => quitInvocations++,
+            confirmExit: () => true);
+
+        window.RequestExit();
+
+        Assert.Equal(1, quitInvocations);
+    }
+
+    [Fact]
+    public void RequestExit_WhenDeclined_KeepsFileTreeFocusedAndDoesNotStop()
+    {
+        var quitInvocations = 0;
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(
+            tree,
+            requestStop: () => quitInvocations++,
+            confirmExit: () => false);
+
+        window.Preview.SetFocus();
+        window.RequestExit();
+
+        Assert.Equal(0, quitInvocations);
+        Assert.True(window.FileTree.HasFocus);
+    }
+
     private static ExplorerWindow CreateWindow(
         FakeFileTreeService tree,
         FakeFileService? preview = null,
@@ -953,7 +1181,8 @@ public sealed class ExplorerWindowTests
         Action? requestStop = null,
         FakeMutationService? mutationService = null,
         Func<FileSystemEntry, bool>? confirmDelete = null,
-        Action? showHelp = null) =>
+        Action? showHelp = null,
+        Func<bool>? confirmExit = null) =>
         new(
             tree,
             preview ?? new FakeFileService(),
@@ -961,7 +1190,8 @@ public sealed class ExplorerWindowTests
             requestStop ?? (() => { }),
             mutationService ?? new FakeMutationService(),
             confirmDelete,
-            showHelp);
+            showHelp,
+            confirmExit: confirmExit);
 
     private sealed class FakeFileTreeService : IFileTreeService
     {
