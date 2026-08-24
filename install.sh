@@ -66,9 +66,9 @@ if [ "$OS" = "linux" ]; then
         GLIBC_MAJOR="$(echo "$GLIBC_VER" | cut -d. -f1)"
         GLIBC_MINOR="$(echo "$GLIBC_VER" | cut -d. -f2)"
 
-        # Minimum required glibc version (2.34)
-        if [ "$GLIBC_MAJOR" -lt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -lt 34 ]; }; then
-            print_error_and_fallback "Your system glibc ($GLIBC_VER) is older than required (>= 2.34)."
+        # Minimum required glibc version (>= 2.28)
+        if [ "$GLIBC_MAJOR" -lt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -lt 28 ]; }; then
+            print_error_and_fallback "Your system glibc ($GLIBC_VER) is older than required (>= 2.28)."
         fi
     fi
 fi
