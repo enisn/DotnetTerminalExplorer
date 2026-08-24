@@ -38,14 +38,18 @@ public sealed class ExplorerWindowTests
         Assert.False(window.Preview.ReadOnly);
         Assert.True(window.EditShortcut.Enabled);
         Assert.True(window.SaveShortcut.Enabled);
+        Assert.True(window.NewFileShortcut.Enabled);
         Assert.True(window.RenameShortcut.Enabled);
+        Assert.True(window.DeleteShortcut.Enabled);
 
         window.FileTree.SelectedObject = tree.Root;
 
         Assert.True(window.Preview.ReadOnly);
         Assert.False(window.EditShortcut.Enabled);
         Assert.False(window.SaveShortcut.Enabled);
+        Assert.True(window.NewFileShortcut.Enabled);
         Assert.False(window.RenameShortcut.Enabled);
+        Assert.False(window.DeleteShortcut.Enabled);
     }
 
     [Fact]
@@ -103,6 +107,75 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
+    public void StartCreate_ShowsInputWithEmptyText()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+        window.NewFileShortcut.Action!.Invoke();
+
+        Assert.True(window.CreateInput.Visible);
+        Assert.Equal(string.Empty, window.CreateInput.Text);
+    }
+
+    [Fact]
+    public void CommitCreate_CallsMutationServiceAndUpdatesTree()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+        window.StartCreate();
+        window.CreateInput.Text = "newfile.txt";
+
+        window.CommitCreate();
+
+        Assert.False(window.CreateInput.Visible);
+        Assert.Equal(tree.ChildDirectory.FullPath, mutation.CreatedEntries[0].parent.FullPath);
+        Assert.Equal("newfile.txt", mutation.CreatedEntries[0].fileName);
+        Assert.Equal("newfile.txt", window.FileTree.SelectedObject?.Name);
+    }
+
+    [Fact]
+    public void CommitCreate_DisplaysErrorWhenCreateFails()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService
+        {
+            CreateError = "File already exists",
+        };
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+        window.StartCreate();
+        window.CreateInput.Text = "newfile.txt";
+
+        window.CommitCreate();
+
+        Assert.False(window.CreateInput.Visible);
+        Assert.Contains("File already exists", window.Preview.Text);
+    }
+
+    [Fact]
+    public void CancelCreate_HidesInputWithoutCreating()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+        window.StartCreate();
+        window.CreateInput.Text = "cancelled.txt";
+
+        window.CancelCreate();
+
+        Assert.False(window.CreateInput.Visible);
+        Assert.Empty(mutation.CreatedEntries);
+    }
+
+    [Fact]
     public void StartRename_ShowsInputWithCurrentName()
     {
         var tree = new FakeFileTreeService();
@@ -149,6 +222,52 @@ public sealed class ExplorerWindowTests
 
         Assert.False(window.RenameInput.Visible);
         Assert.Empty(mutation.RenamedEntries);
+    }
+
+    [Fact]
+    public void DeleteShortcut_DeletesSelectedFileAndResetsLoadedSelection()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.File;
+        Assert.Equal(tree.File, window.LoadedEntry);
+
+        window.DeleteShortcut.Action!.Invoke();
+
+        Assert.Equal([tree.File.FullPath], mutation.DeletedEntries.Select(e => e.FullPath));
+        Assert.Equal(tree.Root, window.LoadedEntry);
+        Assert.Equal(tree.Root, window.FileTree.SelectedObject);
+    }
+
+    [Fact]
+    public void DeleteShortcut_DoesNothingWhenRootIsSelected()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.Root;
+        window.DeleteSelected();
+
+        Assert.Empty(mutation.DeletedEntries);
+    }
+
+    [Fact]
+    public void DeleteShortcut_DisplaysErrorWhenDeleteFails()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService
+        {
+            DeleteError = "Access denied",
+        };
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.DeleteSelected();
+
+        Assert.Contains("Access denied", window.Preview.Text);
     }
 
     [Fact]
@@ -240,7 +359,7 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
-    public void StatusBar_DefinesReloadSaveRenameEditAndQuitShortcuts()
+    public void StatusBar_DefinesReloadSaveNewRenameDeleteEditAndQuitShortcuts()
     {
         var quitInvocations = 0;
         using var window = CreateWindow(
@@ -254,8 +373,14 @@ public sealed class ExplorerWindowTests
         Assert.Equal(Key.S.WithCtrl, window.SaveShortcut.Key);
         Assert.Equal("Save", window.SaveShortcut.Title);
 
+        Assert.Equal(Key.N.WithCtrl, window.NewFileShortcut.Key);
+        Assert.Equal("New", window.NewFileShortcut.Title);
+
         Assert.Equal(Key.F2, window.RenameShortcut.Key);
         Assert.Equal("Rename", window.RenameShortcut.Title);
+
+        Assert.Equal(Key.Delete, window.DeleteShortcut.Key);
+        Assert.Equal("Delete", window.DeleteShortcut.Title);
 
         Assert.Equal(Key.F8, window.EditShortcut.Key);
         Assert.Equal("Edit Ext.", window.EditShortcut.Title);
@@ -357,7 +482,15 @@ public sealed class ExplorerWindowTests
     {
         public List<(FileSystemEntry entry, string newName)> RenamedEntries { get; } = [];
 
+        public List<(FileSystemEntry parent, string fileName)> CreatedEntries { get; } = [];
+
+        public List<FileSystemEntry> DeletedEntries { get; } = [];
+
         public string? RenameError { get; init; }
+
+        public string? CreateError { get; init; }
+
+        public string? DeleteError { get; init; }
 
         public FileRenameResult Rename(FileSystemEntry entry, string newName)
         {
@@ -370,6 +503,30 @@ public sealed class ExplorerWindowTests
             var newPath = Path.Combine(Path.GetDirectoryName(entry.FullPath) ?? "", newName);
             var updated = new FileSystemEntry(newPath, newName, entry.Kind, entry.IsReparsePoint);
             return FileRenameResult.Successful(updated);
+        }
+
+        public FileCreateResult CreateFile(FileSystemEntry parentDirectory, string fileName)
+        {
+            if (CreateError is not null)
+            {
+                return FileCreateResult.Failed(CreateError);
+            }
+
+            CreatedEntries.Add((parentDirectory, fileName));
+            var newPath = Path.Combine(parentDirectory.FullPath, fileName);
+            var created = new FileSystemEntry(newPath, fileName, FileSystemEntryKind.File, IsReparsePoint: false);
+            return FileCreateResult.Successful(created);
+        }
+
+        public FileDeleteResult Delete(FileSystemEntry entry)
+        {
+            if (DeleteError is not null)
+            {
+                return FileDeleteResult.Failed(DeleteError);
+            }
+
+            DeletedEntries.Add(entry);
+            return FileDeleteResult.Successful();
         }
     }
 

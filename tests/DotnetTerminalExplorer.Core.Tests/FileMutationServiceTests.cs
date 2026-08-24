@@ -112,4 +112,144 @@ public sealed class FileMutationServiceTests
         Assert.Contains("already exists", result.ErrorMessage);
         Assert.True(File.Exists(pathA));
     }
+
+    [Fact]
+    public void CreateFile_InDirectory_CreatesFileAndReturnsNewEntry()
+    {
+        using var directory = new TemporaryDirectory();
+        var dirEntry = new FileSystemEntry(
+            directory.Path,
+            "root",
+            FileSystemEntryKind.Directory,
+            IsReparsePoint: false);
+        var service = new FileMutationService();
+
+        var result = service.CreateFile(dirEntry, "created.txt");
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.NewEntry);
+        Assert.Equal("created.txt", result.NewEntry.Name);
+        Assert.True(File.Exists(result.NewEntry.FullPath));
+        Assert.Equal(string.Empty, File.ReadAllText(result.NewEntry.FullPath));
+    }
+
+    [Fact]
+    public void CreateFile_UsingFileEntry_CreatesFileInParentDirectory()
+    {
+        using var directory = new TemporaryDirectory();
+        var existingFile = directory.CreateFile("existing.txt", "content");
+        var fileEntry = new FileSystemEntry(
+            existingFile,
+            "existing.txt",
+            FileSystemEntryKind.File,
+            IsReparsePoint: false);
+        var service = new FileMutationService();
+
+        var result = service.CreateFile(fileEntry, "sibling.txt");
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.NewEntry);
+        Assert.Equal("sibling.txt", result.NewEntry.Name);
+        Assert.True(File.Exists(result.NewEntry.FullPath));
+        Assert.Equal(directory.Path, Path.GetDirectoryName(result.NewEntry.FullPath));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("invalid/name")]
+    [InlineData("invalid\\name")]
+    public void CreateFile_InvalidName_ReturnsFailure(string invalidName)
+    {
+        using var directory = new TemporaryDirectory();
+        var dirEntry = new FileSystemEntry(
+            directory.Path,
+            "root",
+            FileSystemEntryKind.Directory,
+            IsReparsePoint: false);
+        var service = new FileMutationService();
+
+        var result = service.CreateFile(dirEntry, invalidName);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.ErrorMessage);
+    }
+
+    [Fact]
+    public void CreateFile_AlreadyExistingTarget_ReturnsFailure()
+    {
+        using var directory = new TemporaryDirectory();
+        directory.CreateFile("existing.txt", "content");
+        var dirEntry = new FileSystemEntry(
+            directory.Path,
+            "root",
+            FileSystemEntryKind.Directory,
+            IsReparsePoint: false);
+        var service = new FileMutationService();
+
+        var result = service.CreateFile(dirEntry, "existing.txt");
+
+        Assert.False(result.Success);
+        Assert.Contains("already exists", result.ErrorMessage);
+    }
+
+    [Fact]
+    public void Delete_File_DeletesFromDisk()
+    {
+        using var directory = new TemporaryDirectory();
+        var filePath = directory.CreateFile("to-delete.txt", "goodbye");
+        var entry = new FileSystemEntry(
+            filePath,
+            "to-delete.txt",
+            FileSystemEntryKind.File,
+            IsReparsePoint: false);
+        var service = new FileMutationService();
+
+        var result = service.Delete(entry);
+
+        Assert.True(result.Success);
+        Assert.False(File.Exists(filePath));
+    }
+
+    [Fact]
+    public void Delete_Directory_DeletesRecursivelyFromDisk()
+    {
+        using var directory = new TemporaryDirectory();
+        var subDir = directory.CreateDirectory("to-delete-folder");
+        File.WriteAllText(Path.Combine(subDir, "inner.txt"), "inner");
+        var entry = new FileSystemEntry(
+            subDir,
+            "to-delete-folder",
+            FileSystemEntryKind.Directory,
+            IsReparsePoint: false);
+        var service = new FileMutationService();
+
+        var result = service.Delete(entry);
+
+        Assert.True(result.Success);
+        Assert.False(Directory.Exists(subDir));
+    }
+
+    [Fact]
+    public void Delete_ThrowsException_ReturnsFailure()
+    {
+        var entry = new FileSystemEntry(
+            "/nonexistent/file.txt",
+            "file.txt",
+            FileSystemEntryKind.File,
+            IsReparsePoint: false);
+        var service = new FileMutationService(
+            (_, _) => { },
+            (_, _) => { },
+            _ => false,
+            _ => false,
+            _ => { },
+            _ => throw new IOException("Disk error"),
+            _ => { });
+
+        var result = service.Delete(entry);
+
+        Assert.False(result.Success);
+        Assert.Contains("Disk error", result.ErrorMessage);
+    }
 }

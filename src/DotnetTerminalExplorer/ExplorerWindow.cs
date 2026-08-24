@@ -40,6 +40,7 @@ internal sealed class ExplorerWindow : Window
     private FileSystemEntry? _loadedEntry;
     private string _savedContent = string.Empty;
     private FileSystemEntry? _renamingEntry;
+    private FileSystemEntry? _creatingInDirectory;
 
     public ExplorerWindow(
         IFileTreeService fileTree,
@@ -98,6 +99,14 @@ internal sealed class ExplorerWindow : Window
             Height = 1,
             Visible = false,
         };
+        CreateInput = new TextField
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill(),
+            Height = 1,
+            Visible = false,
+        };
         Preview = new TextView
         {
             X = 0,
@@ -128,7 +137,21 @@ internal sealed class ExplorerWindow : Window
             }
         };
 
-        FileTreePane.Add(FileTree, RenameInput);
+        CreateInput.KeyDown += (sender, keyEvent) =>
+        {
+            if (keyEvent == Key.Enter)
+            {
+                CommitCreate();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.Esc)
+            {
+                CancelCreate();
+                keyEvent.Handled = true;
+            }
+        };
+
+        FileTreePane.Add(FileTree, RenameInput, CreateInput);
         PreviewPane.Add(Preview);
         Add(FileTreePane, PreviewPane, StatusBar);
 
@@ -147,13 +170,19 @@ internal sealed class ExplorerWindow : Window
 
     internal TextField RenameInput { get; }
 
+    internal TextField CreateInput { get; }
+
     internal StatusBar StatusBar { get; }
 
     internal Shortcut ReloadShortcut { get; private set; } = null!;
 
     internal Shortcut SaveShortcut { get; private set; } = null!;
 
+    internal Shortcut NewFileShortcut { get; private set; } = null!;
+
     internal Shortcut RenameShortcut { get; private set; } = null!;
+
+    internal Shortcut DeleteShortcut { get; private set; } = null!;
 
     internal Shortcut EditShortcut { get; private set; } = null!;
 
@@ -177,7 +206,16 @@ internal sealed class ExplorerWindow : Window
             BindKeyToApplication = true,
             Enabled = false,
         };
+        NewFileShortcut = new Shortcut(Key.N.WithCtrl, "New", StartCreate)
+        {
+            BindKeyToApplication = true,
+        };
         RenameShortcut = new Shortcut(Key.F2, "Rename", StartRename)
+        {
+            BindKeyToApplication = true,
+            Enabled = false,
+        };
+        DeleteShortcut = new Shortcut(Key.Delete, "Delete", DeleteSelected)
         {
             BindKeyToApplication = true,
             Enabled = false,
@@ -192,7 +230,15 @@ internal sealed class ExplorerWindow : Window
             BindKeyToApplication = true,
         };
 
-        return new StatusBar([ReloadShortcut, SaveShortcut, RenameShortcut, EditShortcut, QuitShortcut]);
+        return new StatusBar([
+            ReloadShortcut,
+            SaveShortcut,
+            NewFileShortcut,
+            RenameShortcut,
+            DeleteShortcut,
+            EditShortcut,
+            QuitShortcut
+        ]);
     }
 
     private void ShowSelection(FileSystemEntry? entry)
@@ -242,8 +288,69 @@ internal sealed class ExplorerWindow : Window
         }
     }
 
+    public void StartCreate()
+    {
+        CancelRename();
+
+        var target = FileTree.SelectedObject ?? _fileTreeService.Root;
+        if (target.IsDirectory)
+        {
+            _creatingInDirectory = target;
+        }
+        else
+        {
+            var parentPath = Path.GetDirectoryName(target.FullPath);
+            _creatingInDirectory = string.IsNullOrEmpty(parentPath)
+                ? _fileTreeService.Root
+                : new FileSystemEntry(parentPath, Path.GetFileName(parentPath), FileSystemEntryKind.Directory, IsReparsePoint: false);
+        }
+
+        CreateInput.Text = string.Empty;
+        CreateInput.Visible = true;
+        CreateInput.SetFocus();
+    }
+
+    public void CommitCreate()
+    {
+        if (_creatingInDirectory is null)
+        {
+            CancelCreate();
+            return;
+        }
+
+        var targetDir = _creatingInDirectory;
+        var createResult = _mutationService.CreateFile(targetDir, CreateInput.Text);
+        if (createResult.Success && createResult.NewEntry is not null)
+        {
+            var newEntry = createResult.NewEntry;
+            CreateInput.Visible = false;
+            _creatingInDirectory = null;
+
+            FileTree.RebuildTree();
+            FileTree.SelectedObject = newEntry;
+            ShowSelection(newEntry);
+            FileTree.SetFocus();
+        }
+        else
+        {
+            CreateInput.Visible = false;
+            _creatingInDirectory = null;
+            ShowPreview(createResult.ErrorMessage ?? "Create file failed.");
+            FileTree.SetFocus();
+        }
+    }
+
+    public void CancelCreate()
+    {
+        _creatingInDirectory = null;
+        CreateInput.Visible = false;
+        FileTree.SetFocus();
+    }
+
     public void StartRename()
     {
+        CancelCreate();
+
         var target = FileTree.SelectedObject;
         if (target is null || target == _fileTreeService.Root)
         {
@@ -298,6 +405,39 @@ internal sealed class ExplorerWindow : Window
         FileTree.SetFocus();
     }
 
+    public void DeleteSelected()
+    {
+        var target = FileTree.SelectedObject;
+        if (target is null || target == _fileTreeService.Root)
+        {
+            return;
+        }
+
+        var deleteResult = _mutationService.Delete(target);
+        if (deleteResult.Success)
+        {
+            if (_loadedEntry is not null &&
+                (_loadedEntry == target || _loadedEntry.FullPath.StartsWith(target.FullPath, StringComparison.Ordinal)))
+            {
+                _loadedEntry = null;
+                _savedContent = string.Empty;
+                Preview.ReadOnly = true;
+                ShowPreview(TextPreview.ForDirectory().Text);
+            }
+
+            FileTree.RebuildTree();
+            FileTree.SelectedObject = _fileTreeService.Root;
+            UpdatePreviewTitle();
+            UpdateShortcutStates();
+            FileTree.SetFocus();
+        }
+        else
+        {
+            ShowPreview(deleteResult.ErrorMessage ?? $"Unable to delete '{target.Name}'.");
+            FileTree.SetFocus();
+        }
+    }
+
     private void EditSelected()
     {
         if (FileTree.SelectedObject is not { IsDirectory: false } selectedFile)
@@ -331,9 +471,12 @@ internal sealed class ExplorerWindow : Window
     private void UpdateShortcutStates()
     {
         var isFile = _loadedEntry is { IsDirectory: false };
+        var hasNonRootSelection = FileTree.SelectedObject is not null && FileTree.SelectedObject != _fileTreeService.Root;
         EditShortcut.Enabled = isFile;
         SaveShortcut.Enabled = isFile && _previewService is ITextFileService;
-        RenameShortcut.Enabled = FileTree.SelectedObject is not null && FileTree.SelectedObject != _fileTreeService.Root;
+        RenameShortcut.Enabled = hasNonRootSelection;
+        DeleteShortcut.Enabled = hasNonRootSelection;
+        NewFileShortcut.Enabled = true;
     }
 
     private void ShowPreview(string text)

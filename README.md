@@ -79,11 +79,13 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | --- | --- |
 | `F5` | Reload the selected file |
 | `Ctrl+S` | Save changes to the active file |
+| `Ctrl+N` | Create a new file in the selected directory |
 | `F2` | Rename the selected file or directory inline |
+| `Del` | Delete the selected file or directory |
 | `F8` | Open the selected file with the operating system's default application |
-| `Esc` | Quit (or cancel inline rename) |
+| `Esc` | Quit (or cancel inline input) |
 
-`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels).
+`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory.
 
 ## Initial behavior
 
