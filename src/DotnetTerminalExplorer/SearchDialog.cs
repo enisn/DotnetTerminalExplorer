@@ -14,6 +14,7 @@ internal sealed class SearchDialog : Dialog
     private const int SearchDebounceMilliseconds = 250;
     private const int FlushIntervalMilliseconds = 100;
     private const int FlushBatchSize = 200;
+    private const int MaxInFlightUiBatches = 3;
 
     private readonly ISearchService _searchService;
     private readonly string _rootPath;
@@ -25,6 +26,7 @@ internal sealed class SearchDialog : Dialog
     private CancellationTokenSource? _searchCts;
     private System.Threading.Timer? _flushTimer;
     private int _searchGeneration;
+    private int _inFlightUiBatches;
     private bool _isContentMode = true;
     private bool _isCaseSensitive;
     private bool _isRegex;
@@ -313,7 +315,7 @@ internal sealed class SearchDialog : Dialog
             }
 
             StopFlushTimer();
-            FlushPendingResults(generation, stopwatch);
+            FlushPendingResults(generation, stopwatch, bypassBackpressure: true);
             ShowCompletionStatus(generation, stopwatch);
         }
         catch (OperationCanceledException)
@@ -336,8 +338,17 @@ internal sealed class SearchDialog : Dialog
         }
     }
 
-    private void FlushPendingResults(int generation, Stopwatch stopwatch)
+    private void FlushPendingResults(int generation, Stopwatch stopwatch, bool bypassBackpressure = false)
     {
+        // Backpressure: if the UI thread is still draining previous batches, leave
+        // results pending and let the flush timer retry shortly.
+        if (!bypassBackpressure &&
+            _application is not null &&
+            Volatile.Read(ref _inFlightUiBatches) >= MaxInFlightUiBatches)
+        {
+            return;
+        }
+
         List<(SearchResult Result, string DisplayLine)> batch;
 
         lock (_pendingLock)
@@ -362,21 +373,54 @@ internal sealed class SearchDialog : Dialog
 
         void ApplyBatch()
         {
-            if (generation != Volatile.Read(ref _searchGeneration))
+            try
             {
-                return;
-            }
+                if (generation != Volatile.Read(ref _searchGeneration))
+                {
+                    return;
+                }
 
-            foreach (var (result, displayLine) in batch)
+                // Suspending events avoids ListWrapper rescanning the whole list
+                // (marks + MaxItemLength) on every single Add, which is O(n^2).
+                ResultsListView.SuspendCollectionChangedEvent();
+                try
+                {
+                    foreach (var (result, displayLine) in batch)
+                    {
+                        _results.Add(result);
+                        _displayList.Add(displayLine);
+                    }
+                }
+                finally
+                {
+                    ResultsListView.ResumeSuspendCollectionChangedEvent();
+                }
+
+                ResultsListView.SetContentSize(
+                    new System.Drawing.Size(
+                        ResultsListView.MaxItemLength,
+                        Math.Max(_displayList.Count, ResultsListView.Viewport.Height)));
+
+                StatusLabel.Text = $"Searching... found {_results.Count} matches ({stopwatch.ElapsedMilliseconds} ms)";
+            }
+            finally
             {
-                _results.Add(result);
-                _displayList.Add(displayLine);
+                if (_application is not null)
+                {
+                    Interlocked.Decrement(ref _inFlightUiBatches);
+                }
             }
-
-            StatusLabel.Text = $"Searching... found {_results.Count} matches ({stopwatch.ElapsedMilliseconds} ms)";
         }
 
-        MarshalToUi(ApplyBatch);
+        if (_application is not null)
+        {
+            Interlocked.Increment(ref _inFlightUiBatches);
+            _application.Invoke(ApplyBatch);
+        }
+        else
+        {
+            ApplyBatch();
+        }
     }
 
     private void ShowCompletionStatus(int generation, Stopwatch stopwatch)

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.IO.Enumeration;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -97,21 +98,24 @@ public sealed class FastSearchEngine : ISearchService
             cancellationToken.ThrowIfCancellationRequested();
             var currentDir = stack.Pop();
 
-            IEnumerable<string> entries;
-            try
-            {
-                entries = Directory.EnumerateFileSystemEntries(currentDir);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                continue;
-            }
+            // Single enumeration syscall per entry: path + name + kind come back together,
+            // reparse points are skipped to avoid symlink cycles.
+            var entries = new FileSystemEnumerable<(string Path, string Name, bool IsDir)>(
+                currentDir,
+                static (ref System.IO.Enumeration.FileSystemEntry entry) => (
+                    entry.ToSpecifiedFullPath(),
+                    entry.FileName.ToString(),
+                    entry.IsDirectory),
+                new EnumerationOptions
+                {
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.ReparsePoint,
+                    RecurseSubdirectories = false,
+                });
 
-            foreach (var entryPath in entries)
+            foreach (var (entryPath, name, isDir) in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var name = Path.GetFileName(entryPath);
-                var isDir = Directory.Exists(entryPath);
 
                 if (filter is not null && filter.IsIgnored(entryPath, isDir))
                 {
@@ -165,6 +169,14 @@ public sealed class FastSearchEngine : ISearchService
         CancellationToken cancellationToken)
     {
         var filter = options.RespectGitIgnore ? new GitIgnoreFilter(rootPath) : null;
+        var comparison = options.IsCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        Regex? regex = null;
+        if (options.IsRegex)
+        {
+            var regexOptions = RegexOptions.Compiled | (options.IsCaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
+            regex = new Regex(options.Query, regexOptions);
+        }
+
         var fileChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(500)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -201,7 +213,7 @@ public sealed class FastSearchEngine : ISearchService
                         while (fileChannel.Reader.TryRead(out var filePath))
                         {
                             cancellationToken.ThrowIfCancellationRequested();
-                            await SearchSingleFileContentAsync(filePath, options, writer, buffer, cancellationToken).ConfigureAwait(false);
+                            await SearchSingleFileContentAsync(filePath, options, regex, comparison, writer, buffer, cancellationToken).ConfigureAwait(false);
                         }
                     }
                 }
@@ -231,20 +243,24 @@ public sealed class FastSearchEngine : ISearchService
             cancellationToken.ThrowIfCancellationRequested();
             var currentDir = stack.Pop();
 
-            IEnumerable<string> entries;
-            try
-            {
-                entries = Directory.EnumerateFileSystemEntries(currentDir);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                continue;
-            }
+            // Single enumeration syscall per entry: path + name + kind come back together,
+            // reparse points are skipped to avoid symlink cycles.
+            var entries = new FileSystemEnumerable<(string Path, string Name, bool IsDir)>(
+                currentDir,
+                static (ref System.IO.Enumeration.FileSystemEntry entry) => (
+                    entry.ToSpecifiedFullPath(),
+                    entry.FileName.ToString(),
+                    entry.IsDirectory),
+                new EnumerationOptions
+                {
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.ReparsePoint,
+                    RecurseSubdirectories = false,
+                });
 
-            foreach (var entryPath in entries)
+            foreach (var (entryPath, name, isDir) in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var isDir = Directory.Exists(entryPath);
 
                 if (filter is not null && filter.IsIgnored(entryPath, isDir))
                 {
@@ -278,14 +294,14 @@ public sealed class FastSearchEngine : ISearchService
                     }
                 }
             }
-
-            await Task.Yield();
         }
     }
 
     private static async Task SearchSingleFileContentAsync(
         string filePath,
         SearchOptions options,
+        Regex? regex,
+        StringComparison comparison,
         ChannelWriter<SearchResult> writer,
         byte[] buffer,
         CancellationToken cancellationToken)
@@ -316,14 +332,6 @@ public sealed class FastSearchEngine : ISearchService
             stream.Seek(0, SeekOrigin.Begin);
 
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-
-            var comparison = options.IsCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-            Regex? regex = null;
-            if (options.IsRegex)
-            {
-                var regexOptions = RegexOptions.Compiled | (options.IsCaseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase);
-                regex = new Regex(options.Query, regexOptions);
-            }
 
             var entry = new FileSystemEntry(
                 filePath,

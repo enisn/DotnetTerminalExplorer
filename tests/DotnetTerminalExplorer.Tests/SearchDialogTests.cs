@@ -101,6 +101,7 @@ public sealed class SearchDialogTests
         await Task.Delay(600);
 
         Assert.Contains("Found 2 matches in", dialog.StatusLabel.Text);
+        Assert.Equal(2, dialog.ResultsListView.Source?.Count ?? -1);
     }
 
     private static SearchResult CreateFileMatch()
