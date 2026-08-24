@@ -48,6 +48,10 @@ esac
 
 RID="${OS}-${ARCH}"
 
+if [ "$OS" = "osx" ] && [ "$ARCH" = "x64" ]; then
+    print_error_and_fallback "macOS on Intel (x86_64) is not available as a standalone binary."
+fi
+
 # 3. Determine Installation Directory
 if [ -z "$INSTALL_DIR" ]; then
     if [ "$(id -u)" -eq 0 ]; then

@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/enisn/DotnetTerminalExplorer/main/install.
 ```
 
 #### Manual Download
-You can also download prebuilt standalone binaries directly from the [GitHub Releases](https://github.com/enisn/DotnetTerminalExplorer/releases) page (`linux-x64`, `linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-arm64`).
+You can also download prebuilt standalone binaries directly from the [GitHub Releases](https://github.com/enisn/DotnetTerminalExplorer/releases) page (`linux-x64`, `linux-arm64`, `osx-arm64`, `win-x64`, `win-arm64`).
 
 ---
 
