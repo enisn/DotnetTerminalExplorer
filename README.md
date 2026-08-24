@@ -11,11 +11,34 @@ Dotnet Terminal Explorer (`dte`) is a deliberately lightweight, scoped file expl
 - .NET 10 SDK to build the repository.
 - .NET 10 runtime to run the framework-dependent tool.
 
-## Install
+## Installation
+
+### Option 1: Standalone Native Binary (Zero .NET runtime required)
+
+#### Linux & macOS
+```bash
+curl -fsSL https://raw.githubusercontent.com/enisn/DotnetTerminalExplorer/main/install.sh | bash
+```
+
+#### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/enisn/DotnetTerminalExplorer/main/install.ps1 | iex
+```
+
+#### Manual Download
+You can also download prebuilt standalone binaries directly from the [GitHub Releases](https://github.com/enisn/DotnetTerminalExplorer/releases) page (`linux-x64`, `linux-arm64`, `osx-arm64`, `osx-x64`, `win-x64`, `win-arm64`).
+
+---
+
+### Option 2: As a .NET Global Tool (requires .NET 10 Runtime)
 
 ```shell
 dotnet tool install --global DotnetTerminalExplorer
 ```
+
+---
+
+## Usage
 
 Run it for the current directory or a specific scoped folder:
 
@@ -77,10 +100,10 @@ pwsh ./pack.ps1
 Repack and install the local package globally:
 
 ```powershell
-pwsh ./install.ps1
+pwsh ./install-dev.ps1
 ```
 
-The install script removes an existing global development installation first so rebuilding the same version is deterministic.
+The development install script removes an existing global development installation first so rebuilding the same version is deterministic.
 
 ## Publishing
 
