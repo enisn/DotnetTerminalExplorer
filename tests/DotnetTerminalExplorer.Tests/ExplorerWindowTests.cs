@@ -393,6 +393,60 @@ public sealed class ExplorerWindowTests
         Assert.Equal(1, quitInvocations);
     }
 
+    [Fact]
+    public void SelectingImageFile_ShowsImageViewAndDisablesSave()
+    {
+        var tree = new FakeFileTreeService();
+        var imageEntry = new FileSystemEntry("/scope/photo.png", "photo.png", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        preview.PreviewByPath[imageEntry.FullPath] = TextPreview.ForImage("Format: PNG | 800x600");
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = imageEntry;
+
+        Assert.True(window.ImagePreview.Visible);
+        Assert.False(window.Preview.Visible);
+        Assert.False(window.SaveShortcut.Enabled);
+        Assert.True(window.EditShortcut.Enabled);
+        Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void SelectingBinaryFile_ShowsBinaryInfoAndDisablesSave()
+    {
+        var tree = new FakeFileTreeService();
+        var binEntry = new FileSystemEntry("/scope/app.dll", "app.dll", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        preview.PreviewByPath[binEntry.FullPath] = TextPreview.ForBinary("[Binary File]");
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = binEntry;
+
+        Assert.False(window.ImagePreview.Visible);
+        Assert.True(window.Preview.Visible);
+        Assert.True(window.Preview.ReadOnly);
+        Assert.False(window.SaveShortcut.Enabled);
+        Assert.True(window.EditShortcut.Enabled);
+        Assert.Equal("[Binary File]", window.Preview.Text);
+        Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void EditShortcut_LaunchesImageFileWithExternalProgram()
+    {
+        var tree = new FakeFileTreeService();
+        var imageEntry = new FileSystemEntry("/scope/logo.png", "logo.png", FileSystemEntryKind.File, IsReparsePoint: false);
+        var preview = new FakeFileService();
+        var launcher = new FakeLauncher();
+        preview.PreviewByPath[imageEntry.FullPath] = TextPreview.ForImage("Format: PNG");
+        using var window = CreateWindow(tree, preview, launcher);
+
+        window.FileTree.SelectedObject = imageEntry;
+        window.EditShortcut.Action!.Invoke();
+
+        Assert.Equal(["/scope/logo.png"], launcher.LaunchedPaths);
+    }
+
     private static ExplorerWindow CreateWindow(
         FakeFileTreeService tree,
         FakeFileService? preview = null,
@@ -451,6 +505,8 @@ public sealed class ExplorerWindowTests
     {
         public Dictionary<string, string> ContentByPath { get; } = [];
 
+        public Dictionary<string, TextPreview> PreviewByPath { get; } = [];
+
         public Dictionary<string, string> SavedContentByPath { get; } = [];
 
         public List<string> ReadPaths { get; } = [];
@@ -460,6 +516,11 @@ public sealed class ExplorerWindowTests
         public TextPreview Read(FileSystemEntry entry)
         {
             ReadPaths.Add(entry.FullPath);
+
+            if (PreviewByPath.TryGetValue(entry.FullPath, out var customPreview))
+            {
+                return customPreview;
+            }
 
             return entry.IsDirectory
                 ? TextPreview.ForDirectory()

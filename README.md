@@ -92,8 +92,10 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 - Directories are listed before files, and hidden entries are included.
 - Only the root's immediate children are enumerated at startup. Descendants are read when their directory is expanded.
 - Directory symlinks and reparse points inside the selected scope are shown but are not expanded.
-- File previews and edits use UTF-8 text read/write with dirty state tracking.
-- There is no search, file watcher, binary detection, preview-size limit, or external configuration loading.
+- Text files support inline viewing and editing with dirty state tracking and `Ctrl+S` saving.
+- Image files (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.ico`, etc.) are rendered inline as TrueColor half-block (`▀`) thumbnails with format, dimension, and size metadata.
+- Non-image binary files display structured metadata summaries instead of unprintable characters.
+- Press `F8` on any selected file to open it with the operating system's default viewer or editor.
 
 ## Lightweight startup
 

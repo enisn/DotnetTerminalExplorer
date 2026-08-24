@@ -21,27 +21,8 @@ public sealed class TextFileService : ITextFileService
         _writeAllText = writeAllText;
     }
 
-    public TextPreview Read(FileSystemEntry entry)
-    {
-        ArgumentNullException.ThrowIfNull(entry);
-
-        if (entry.IsDirectory)
-        {
-            return TextPreview.ForDirectory();
-        }
-
-        try
-        {
-            return TextPreview.FromContent(_readAllText(entry.FullPath));
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or System.Security.SecurityException)
-        {
-            return TextPreview.FromError(
-                $"Unable to preview '{entry.Name}': {exception.Message}");
-        }
-    }
+    public TextPreview Read(FileSystemEntry entry) =>
+        FilePreviewHelper.ReadPreview(entry, _readAllText);
 
     public FileSaveResult Save(FileSystemEntry entry, string content)
     {
@@ -51,6 +32,11 @@ public sealed class TextFileService : ITextFileService
         if (entry.IsDirectory)
         {
             return FileSaveResult.Failed("Cannot save content to a directory.");
+        }
+
+        if (FileTypeClassifier.IsImageExtension(entry.FullPath) || FileTypeClassifier.IsBinaryFile(entry.FullPath))
+        {
+            return FileSaveResult.Failed("Cannot save text to a binary or image file.");
         }
 
         try

@@ -15,25 +15,6 @@ public sealed class TextPreviewService : ITextPreviewService
         _readAllText = readAllText;
     }
 
-    public TextPreview Read(FileSystemEntry entry)
-    {
-        ArgumentNullException.ThrowIfNull(entry);
-
-        if (entry.IsDirectory)
-        {
-            return TextPreview.ForDirectory();
-        }
-
-        try
-        {
-            return TextPreview.FromContent(_readAllText(entry.FullPath));
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or System.Security.SecurityException)
-        {
-            return TextPreview.FromError(
-                $"Unable to preview '{entry.Name}': {exception.Message}");
-        }
-    }
+    public TextPreview Read(FileSystemEntry entry) =>
+        FilePreviewHelper.ReadPreview(entry, _readAllText);
 }

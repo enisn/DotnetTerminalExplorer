@@ -5,4 +5,6 @@ public enum TextPreviewKind
     Content,
     Directory,
     Error,
+    Binary,
+    Image,
 }

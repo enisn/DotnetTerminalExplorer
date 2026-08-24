@@ -1,4 +1,6 @@
 using DotnetTerminalExplorer.Core;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace DotnetTerminalExplorer.Core.Tests;
 
@@ -12,7 +14,7 @@ public sealed class TextPreviewServiceTests
         var path = directory.CreateFile("unicode.txt", content);
         var service = new TextPreviewService();
 
-        var result = service.Read(File(path));
+        var result = service.Read(Entry(path));
 
         Assert.Equal(TextPreviewKind.Content, result.Kind);
         Assert.Equal(content, result.Text);
@@ -42,7 +44,7 @@ public sealed class TextPreviewServiceTests
         var path = Path.Combine(directory.Path, "missing.txt");
         var service = new TextPreviewService();
 
-        var result = service.Read(File(path));
+        var result = service.Read(Entry(path));
 
         Assert.Equal(TextPreviewKind.Error, result.Kind);
         Assert.Contains("missing.txt", result.Text);
@@ -54,14 +56,48 @@ public sealed class TextPreviewServiceTests
         var service = new TextPreviewService(
             _ => throw new UnauthorizedAccessException("Access denied for test."));
 
-        var result = service.Read(File("protected.txt"));
+        var result = service.Read(Entry("protected.txt"));
 
         Assert.Equal(TextPreviewKind.Error, result.Kind);
         Assert.Contains("protected.txt", result.Text);
         Assert.Contains("Access denied", result.Text);
     }
 
-    private static FileSystemEntry File(string path) =>
+    [Fact]
+    public void Read_ReturnsBinaryInfoForBinaryFiles()
+    {
+        using var directory = new TemporaryDirectory();
+        var binPath = Path.Combine(directory.Path, "program.bin");
+        System.IO.File.WriteAllBytes(binPath, [0x00, 0x01, 0x02, 0x03]);
+        var service = new TextPreviewService();
+
+        var result = service.Read(Entry(binPath));
+
+        Assert.Equal(TextPreviewKind.Binary, result.Kind);
+        Assert.Contains("[Binary File]", result.Text);
+        Assert.Contains("program.bin", result.Text);
+        Assert.Contains("F8", result.Text);
+    }
+
+    [Fact]
+    public void Read_ReturnsImageInfoForImageFiles()
+    {
+        using var directory = new TemporaryDirectory();
+        var imgPath = Path.Combine(directory.Path, "test.png");
+        using (var img = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(16, 32))
+        {
+            img.SaveAsPng(imgPath);
+        }
+
+        var service = new TextPreviewService();
+        var result = service.Read(Entry(imgPath));
+
+        Assert.Equal(TextPreviewKind.Image, result.Kind);
+        Assert.Contains("16x32", result.Text);
+        Assert.Contains("PNG", result.Text);
+    }
+
+    private static FileSystemEntry Entry(string path) =>
         new(
             path,
             Path.GetFileName(path),

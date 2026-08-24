@@ -120,6 +120,15 @@ internal sealed class ExplorerWindow : Window
         };
         Preview.SetScheme(PreviewColorScheme);
 
+        ImagePreview = new ImagePreviewView
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+            Visible = false,
+        };
+
         FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
         Preview.ContentsChanged += (_, _) => UpdatePreviewTitle();
 
@@ -152,7 +161,7 @@ internal sealed class ExplorerWindow : Window
         };
 
         FileTreePane.Add(FileTree, RenameInput, CreateInput);
-        PreviewPane.Add(Preview);
+        PreviewPane.Add(Preview, ImagePreview);
         Add(FileTreePane, PreviewPane, StatusBar);
 
         FileTree.AddObject(fileTree.Root);
@@ -167,6 +176,8 @@ internal sealed class ExplorerWindow : Window
     internal TreeView<FileSystemEntry> FileTree { get; }
 
     internal TextView Preview { get; }
+
+    internal ImagePreviewView ImagePreview { get; }
 
     internal TextField RenameInput { get; }
 
@@ -191,6 +202,8 @@ internal sealed class ExplorerWindow : Window
     public bool IsDirty =>
         _loadedEntry is { IsDirectory: false }
         && _previewService is ITextFileService
+        && !Preview.ReadOnly
+        && Preview.Visible
         && Preview.Text != _savedContent;
 
     public FileSystemEntry? LoadedEntry => _loadedEntry;
@@ -248,15 +261,31 @@ internal sealed class ExplorerWindow : Window
         if (entry is null || entry.IsDirectory)
         {
             _savedContent = string.Empty;
+            ImagePreview.Visible = false;
+            ImagePreview.Clear();
+            Preview.Visible = true;
             Preview.ReadOnly = true;
             ShowPreview(TextPreview.ForDirectory().Text);
         }
         else
         {
             var preview = _previewService.Read(entry);
-            _savedContent = preview.Kind == TextPreviewKind.Content ? preview.Text : string.Empty;
-            Preview.ReadOnly = preview.Kind != TextPreviewKind.Content;
-            ShowPreview(preview.Text);
+            if (preview.Kind == TextPreviewKind.Image)
+            {
+                _savedContent = string.Empty;
+                Preview.Visible = false;
+                ImagePreview.Visible = true;
+                ImagePreview.SetImage(entry.FullPath, preview.Text);
+            }
+            else
+            {
+                ImagePreview.Visible = false;
+                ImagePreview.Clear();
+                Preview.Visible = true;
+                _savedContent = preview.Kind == TextPreviewKind.Content ? preview.Text : string.Empty;
+                Preview.ReadOnly = preview.Kind != TextPreviewKind.Content;
+                ShowPreview(preview.Text);
+            }
         }
 
         UpdatePreviewTitle();
@@ -421,6 +450,9 @@ internal sealed class ExplorerWindow : Window
             {
                 _loadedEntry = null;
                 _savedContent = string.Empty;
+                ImagePreview.Visible = false;
+                ImagePreview.Clear();
+                Preview.Visible = true;
                 Preview.ReadOnly = true;
                 ShowPreview(TextPreview.ForDirectory().Text);
             }
@@ -471,9 +503,10 @@ internal sealed class ExplorerWindow : Window
     private void UpdateShortcutStates()
     {
         var isFile = _loadedEntry is { IsDirectory: false };
+        var isEditableText = isFile && _previewService is ITextFileService && !Preview.ReadOnly && Preview.Visible;
         var hasNonRootSelection = FileTree.SelectedObject is not null && FileTree.SelectedObject != _fileTreeService.Root;
         EditShortcut.Enabled = isFile;
-        SaveShortcut.Enabled = isFile && _previewService is ITextFileService;
+        SaveShortcut.Enabled = isEditableText;
         RenameShortcut.Enabled = hasNonRootSelection;
         DeleteShortcut.Enabled = hasNonRootSelection;
         NewFileShortcut.Enabled = true;
