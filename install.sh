@@ -40,6 +40,15 @@ esac
 
 # 2. Detect CPU Architecture
 ARCH_TYPE="$(uname -m)"
+
+# Under Rosetta, uname reports the translated process architecture rather than
+# the Apple Silicon hardware architecture.
+if [ "$OS" = "osx" ] && [ "$ARCH_TYPE" = "x86_64" ] && command -v sysctl >/dev/null 2>&1; then
+    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = "1" ]; then
+        ARCH_TYPE="arm64"
+    fi
+fi
+
 case "$ARCH_TYPE" in
     x86_64|amd64)   ARCH="x64" ;;
     aarch64|arm64)  ARCH="arm64" ;;
