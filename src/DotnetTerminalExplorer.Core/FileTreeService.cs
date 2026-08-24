@@ -109,25 +109,24 @@ public sealed class FileTreeService : IFileTreeService
             return new FileTreePage([], HasMore: false);
         }
 
-        // The within-page sort keeps each page readable; a global sort would
-        // require enumerating the whole directory up front, which is exactly
-        // what paging exists to avoid.
-        IEnumerable<string> candidates = _enumerateEntries(directory.FullPath)
+        // Skip/take must run on the fully sorted sequence: filesystem enumeration
+        // order is arbitrary, so paging before sorting would duplicate or drop
+        // entries across page boundaries whenever the two orders disagree.
+        IEnumerable<FileSystemEntry> entries = _enumerateEntries(directory.FullPath)
             .Where(IsWithinRoot)
+            .Select(CreateEntry)
+            .OrderByDescending(static entry => entry.IsDirectory)
+            .ThenBy(static entry => entry.Name, NameComparer)
+            .ThenBy(static entry => entry.FullPath, NameComparer)
             .Skip(skip);
 
         if (PageSize < int.MaxValue)
         {
             // Fetch one extra entry to detect whether another page follows.
-            candidates = candidates.Take(PageSize + 1);
+            entries = entries.Take(PageSize + 1);
         }
 
-        var page = candidates
-            .Select(CreateEntry)
-            .OrderByDescending(static entry => entry.IsDirectory)
-            .ThenBy(static entry => entry.Name, NameComparer)
-            .ThenBy(static entry => entry.FullPath, NameComparer)
-            .ToArray();
+        var page = entries.ToArray();
 
         return page.Length > PageSize
             ? new FileTreePage(page[..PageSize], HasMore: true)

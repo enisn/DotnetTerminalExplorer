@@ -114,6 +114,42 @@ public sealed class FileTreeServiceTests
     }
 
     [Fact]
+    public void GetChildrenPage_PagesStayConsistentRegardlessOfEnumerationOrder()
+    {
+        using var directory = new TemporaryDirectory();
+        directory.CreateDirectory("zulu");
+        directory.CreateDirectory("alpha");
+        directory.CreateFile("beta.txt");
+        directory.CreateFile("gamma.txt");
+        directory.CreateFile("delta.txt");
+
+        // Force the worst case: enumeration order is the exact reverse of the
+        // sorted order, so paging before sorting would duplicate/miss entries.
+        var reversed = Directory
+            .EnumerateFileSystemEntries(directory.Path)
+            .OrderDescending(StringComparer.Ordinal)
+            .ToArray();
+        var service = new FileTreeService(
+            directory.Path,
+            _ => reversed,
+            File.GetAttributes,
+            pageSize: 2);
+
+        var pages = new List<string>();
+        FileTreePage page;
+        var skip = 0;
+        do
+        {
+            page = service.GetChildrenPage(service.Root, skip);
+            pages.AddRange(page.Entries.Select(entry => entry.Name));
+            skip += page.Entries.Count;
+        }
+        while (page.HasMore);
+
+        Assert.Equal(["alpha", "zulu", "beta.txt", "delta.txt", "gamma.txt"], pages);
+    }
+
+    [Fact]
     public void GetChildrenPage_ReturnsFullListingWhenItFitsInOnePage()
     {
         using var directory = new TemporaryDirectory();
