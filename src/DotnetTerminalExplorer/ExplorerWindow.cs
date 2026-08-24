@@ -42,6 +42,7 @@ internal sealed class ExplorerWindow : Window
     private readonly IDefaultFileLauncher _launcher;
     private readonly ITextPreviewService _previewService;
     private readonly IFileMutationService _mutationService;
+    private readonly ISearchService _searchService;
     private readonly Func<FileSystemEntry, bool> _confirmDelete;
     private readonly Action _showHelp;
     private readonly IApplication? _application;
@@ -64,7 +65,8 @@ internal sealed class ExplorerWindow : Window
         IFileMutationService? mutationService = null,
         Func<FileSystemEntry, bool>? confirmDelete = null,
         Action? showHelp = null,
-        IApplication? application = null)
+        IApplication? application = null,
+        ISearchService? searchService = null)
     {
         ArgumentNullException.ThrowIfNull(fileTree);
         ArgumentNullException.ThrowIfNull(previewService);
@@ -75,6 +77,7 @@ internal sealed class ExplorerWindow : Window
         _previewService = previewService;
         _launcher = launcher;
         _mutationService = mutationService ?? new FileMutationService();
+        _searchService = searchService ?? new FastSearchEngine();
         _confirmDelete = confirmDelete ?? ConfirmDeleteViaMessageBox;
         _showHelp = showHelp ?? ShowHelpViaDialog;
         _application = application;
@@ -152,6 +155,14 @@ internal sealed class ExplorerWindow : Window
             UiInvoker = _application is null ? null : _application.Invoke,
         };
 
+        FindBar = new EditorFindBar(Preview)
+        {
+            X = 0,
+            Y = Pos.AnchorEnd(1),
+            Visible = false,
+        };
+        FindBar.OnClose = () => Preview.SetFocus();
+
         FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
         Preview.ContentsChanged += (_, _) => UpdatePreviewTitle();
 
@@ -165,6 +176,35 @@ internal sealed class ExplorerWindow : Window
             else if (keyEvent == Key.CursorRight.WithAlt || keyEvent == new Key(']').WithAlt)
             {
                 ExpandLeftPane();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.F.WithCtrl || keyEvent == Key.F3)
+            {
+                if (FindBar.Visible)
+                {
+                    FindBar.NextMatch();
+                }
+                else
+                {
+                    TriggerContextAwareSearch();
+                }
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.F3.WithShift)
+            {
+                if (FindBar.Visible)
+                {
+                    FindBar.PreviousMatch();
+                }
+                else
+                {
+                    TriggerContextAwareSearch();
+                }
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.F.WithCtrl.WithShift)
+            {
+                OpenWorkspaceSearch();
                 keyEvent.Handled = true;
             }
         };
@@ -198,12 +238,15 @@ internal sealed class ExplorerWindow : Window
         };
 
         FileTreePane.Add(FileTree, RenameInput, CreateInput);
-        PreviewPane.Add(Preview, ImagePreview);
+        PreviewPane.Add(Preview, ImagePreview, FindBar);
         Add(FileTreePane, PreviewPane, StatusBar);
 
         FileTree.AddObject(fileTree.Root);
         FileTree.GoToFirst();
         FileTree.Expand(fileTree.Root);
+        FileTree.SetFocus();
+
+        Initialized += (_, _) => FileTree.SetFocus();
     }
 
     internal FileSystemTreeBuilder TreeBuilder { get; }
@@ -218,6 +261,8 @@ internal sealed class ExplorerWindow : Window
 
     internal ImagePreviewView ImagePreview { get; }
 
+    internal EditorFindBar FindBar { get; }
+
     internal TextField RenameInput { get; }
 
     internal TextField CreateInput { get; }
@@ -225,6 +270,8 @@ internal sealed class ExplorerWindow : Window
     internal StatusBar StatusBar { get; }
 
     internal Shortcut HelpShortcut { get; private set; } = null!;
+
+    internal Shortcut SearchShortcut { get; private set; } = null!;
 
     internal Shortcut ReloadShortcut { get; private set; } = null!;
 
@@ -315,6 +362,10 @@ internal sealed class ExplorerWindow : Window
         {
             BindKeyToApplication = true,
         };
+        SearchShortcut = new Shortcut(Key.F.WithCtrl, "Search", TriggerContextAwareSearch)
+        {
+            BindKeyToApplication = true,
+        };
         ReloadShortcut = new Shortcut(Key.F5, "Reload", ReloadSelected)
         {
             BindKeyToApplication = true,
@@ -355,6 +406,7 @@ internal sealed class ExplorerWindow : Window
 
         return new StatusBar([
             HelpShortcut,
+            SearchShortcut,
             ReloadShortcut,
             SaveShortcut,
             LoadShortcut,
@@ -415,6 +467,7 @@ internal sealed class ExplorerWindow : Window
         _loadedEntry = entry;
         _previewLoadVersion++;
         _previewKind = null;
+        FindBar.Reset();
 
         if (entry is { Kind: FileSystemEntryKind.LoadMore })
         {
@@ -826,6 +879,11 @@ internal sealed class ExplorerWindow : Window
             "  Alt+Right / Alt+] Expand the left Files panel\n" +
             "  Up / Down / Enter Navigate directories and select files\n" +
             "  Right / Ctrl+Right Expand the selected directory (one level)\n\n" +
+            "Search:\n" +
+            "  Ctrl+F / F3       Find in active file (if editor focused) or Workspace Search (if tree focused)\n" +
+            "  Ctrl+Shift+F      Workspace Search across all files (Ripgrep speed)\n" +
+            "  F3 / Enter        Next match in find bar\n" +
+            "  Shift+F3 / S-Ent  Previous match in find bar\n\n" +
             "File Operations:\n" +
             "  Ctrl+S            Save modifications to the active file\n" +
             "  Ctrl+N            Create a new file in the selected directory\n" +
@@ -841,8 +899,8 @@ internal sealed class ExplorerWindow : Window
         var dialog = new Dialog
         {
             Title = "Keyboard Shortcuts & Help",
-            Width = 76,
-            Height = 22,
+            Width = 84,
+            Height = 24,
         };
 
         var label = new Label
@@ -871,6 +929,115 @@ internal sealed class ExplorerWindow : Window
         dialog.Add(label);
 
         _application.Run(dialog);
+    }
+
+    public void TriggerContextAwareSearch()
+    {
+        var isEditorFocused = Preview.HasFocus || FindBar.HasFocus || FindBar.QueryInput.HasFocus;
+        if (isEditorFocused && _loadedEntry is { Kind: FileSystemEntryKind.File } && Preview.Visible)
+        {
+            FindBar.Open();
+        }
+        else
+        {
+            OpenWorkspaceSearch();
+        }
+    }
+
+    public void OpenWorkspaceSearch()
+    {
+        if (_application is null)
+        {
+            return;
+        }
+
+        var dialog = new SearchDialog(_searchService, _fileTreeService.Root.FullPath, _application);
+        dialog.ResultChosen += NavigateToSearchResult;
+
+        _application.Run(dialog);
+    }
+
+    public void NavigateToSearchResult(SearchResult result)
+    {
+        ExpandAndSelectPath(result.Entry.FullPath);
+        ShowSelection(result.Entry);
+        if (result.LineNumber > 0)
+        {
+            ScrollToLine(result.LineNumber, result.ColumnNumber);
+        }
+        FileTree.SetFocus();
+    }
+
+    public bool ExpandAndSelectPath(string targetFullPath)
+    {
+        var normalizedTarget = Path.GetFullPath(targetFullPath);
+        var root = _fileTreeService.Root;
+        var normalizedRoot = Path.GetFullPath(root.FullPath);
+
+        if (!normalizedTarget.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(normalizedTarget, normalizedRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            FileTree.SelectedObject = root;
+            return true;
+        }
+
+        var relative = Path.GetRelativePath(normalizedRoot, normalizedTarget);
+        var segments = relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+
+        var current = root;
+        var currentAccumulatedPath = normalizedRoot;
+
+        for (int i = 0; i < segments.Length; i++)
+        {
+            currentAccumulatedPath = Path.Combine(currentAccumulatedPath, segments[i]);
+            var isLast = i == segments.Length - 1;
+
+            FileTree.Expand(current);
+
+            var children = TreeBuilder.GetChildren(current).ToList();
+            var next = children.FirstOrDefault(c => string.Equals(c.FullPath, currentAccumulatedPath, StringComparison.OrdinalIgnoreCase));
+
+            while (next is null && TreeBuilder.Advance(current))
+            {
+                children = TreeBuilder.GetChildren(current).ToList();
+                next = children.FirstOrDefault(c => string.Equals(c.FullPath, currentAccumulatedPath, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (next is null)
+            {
+                return false;
+            }
+
+            if (isLast)
+            {
+                FileTree.RefreshObject(current, startAtTop: false);
+                FileTree.SelectedObject = next;
+                return true;
+            }
+            else
+            {
+                current = next;
+            }
+        }
+
+        return false;
+    }
+
+    private void ScrollToLine(int lineNumber, int columnNumber)
+    {
+        try
+        {
+            var row = Math.Max(0, lineNumber - 1);
+            Preview.ScrollTo(new Point(0, Math.Max(0, row - 5)));
+            Preview.SetNeedsDraw();
+        }
+        catch
+        {
+        }
     }
 
     private void EditSelected()

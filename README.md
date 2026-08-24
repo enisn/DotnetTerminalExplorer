@@ -83,6 +83,10 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | Shortcut | Action |
 | --- | --- |
 | `F1` | Show the Keyboard Shortcuts & Help dialog |
+| `Ctrl+F` / `F3` | Find in active file (if editor focused) or Workspace Search (if tree focused) |
+| `Ctrl+Shift+F` | Workspace Search across all files (Ripgrep speed) |
+| `F3` / `Enter` | Next match in find bar |
+| `Shift+F3` / `Shift+Enter` | Previous match in find bar |
 | `Alt+Left` / `Alt+[` | Shrink the left Files panel width |
 | `Alt+Right` / `Alt+]` | Expand the left Files panel width |
 | `F5` | Reload the selected file |
@@ -94,6 +98,8 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `Del` | Delete the selected file or directory (asks for confirmation) |
 | `F8` | Open the selected file with the operating system's default application |
 | `Esc` | Quit (or cancel inline input / dialog) |
+
+`Ctrl+F` / `F3` is context-aware: pressing it while focused on the editor opens an in-editor find bar with instant match navigation (`Enter`/`F3` for next, `Shift+Enter`/`Shift+F3` for previous, `Alt+C` for case sensitivity); pressing it while focused on the file tree (or pressing `Ctrl+Shift+F` anytime) opens a ripgrep-grade workspace search modal streaming matches asynchronously across the repository with GitIgnore filtering, regex support, and file/content mode toggles.
 
 `F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory after confirming in a modal dialog. Press `F1` at any time to open the full help dialog.
 

@@ -23,6 +23,7 @@ public sealed class ExplorerWindowTests
         Assert.Equal(window.CalculatedLeftPaneWidth, window.GetCalculatedLeftPaneWidth());
         Assert.Equal(2, window.SubViews.Count(view => view != window.StatusBar));
         Assert.Equal([tree.Root.FullPath], tree.EnumeratedDirectories);
+        Assert.True(window.FileTree.HasFocus);
     }
 
     [Fact]
@@ -865,6 +866,86 @@ public sealed class ExplorerWindowTests
         Assert.Equal(["/scope/logo.png"], launcher.LaunchedPaths);
     }
 
+    [Fact]
+    public void TriggerContextAwareSearch_WhenEditorFocusedAndFileLoaded_OpensFindBar()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "Sample file content";
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = tree.File;
+
+        // Simulate focus on Preview
+        window.Preview.SetFocus();
+
+        Assert.False(window.FindBar.Visible);
+        window.TriggerContextAwareSearch();
+
+        Assert.True(window.FindBar.Visible);
+    }
+
+    [Fact]
+    public void TriggerContextAwareSearch_WhenFileTreeFocused_KeepsFindBarClosed()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+        window.FileTree.SetFocus();
+
+        window.TriggerContextAwareSearch();
+
+        Assert.False(window.FindBar.Visible);
+    }
+
+    [Fact]
+    public void ChangingTreeSelection_DoesNotStealFocusToPreview()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "Sample file content";
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SetFocus();
+        Assert.True(window.FileTree.HasFocus);
+
+        // Change tree selection as when navigating with arrow keys
+        window.FileTree.SelectedObject = tree.File;
+
+        Assert.True(window.FileTree.HasFocus);
+        Assert.False(window.Preview.HasFocus);
+    }
+
+    [Fact]
+    public void NavigateToSearchResult_SelectsFileAndLoadsPreview()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "Line 1\nLine 2 target\nLine 3";
+        using var window = CreateWindow(tree, preview);
+
+        var result = new SearchResult(tree.File, 2, 8, "Line 2 target", 6);
+        window.NavigateToSearchResult(result);
+
+        Assert.Equal(tree.File, window.LoadedEntry);
+        Assert.Equal(tree.File, window.FileTree.SelectedObject);
+        Assert.Equal("Line 1\nLine 2 target\nLine 3", window.Preview.Text);
+    }
+
+    [Fact]
+    public void ExpandAndSelectPath_SelectsNestedFileAndExpandsParents()
+    {
+        var tree = new FakeFileTreeService();
+        var nestedDir = new FileSystemEntry("/scope/sub", "sub", FileSystemEntryKind.Directory, false);
+        var nestedFile = new FileSystemEntry("/scope/sub/nested.txt", "nested.txt", FileSystemEntryKind.File, false);
+        tree.AdditionalChildren.Add(nestedDir);
+        tree.ChildrenByDirectory[nestedDir.FullPath] = [nestedFile];
+
+        using var window = CreateWindow(tree);
+
+        var success = window.ExpandAndSelectPath(nestedFile.FullPath);
+        Assert.True(success);
+        Assert.Equal(nestedFile, window.FileTree.SelectedObject);
+    }
+
     private static ExplorerWindow CreateWindow(
         FakeFileTreeService tree,
         FakeFileService? preview = null,
@@ -911,6 +992,8 @@ public sealed class ExplorerWindowTests
 
         public List<FileSystemEntry> AdditionalChildren { get; } = [];
 
+        public Dictionary<string, List<FileSystemEntry>> ChildrenByDirectory { get; } = [];
+
         public List<string> EnumeratedDirectories { get; } = [];
 
         public int PageSize { get; set; } = int.MaxValue;
@@ -920,6 +1003,11 @@ public sealed class ExplorerWindowTests
         public IReadOnlyList<FileSystemEntry> GetChildren(FileSystemEntry directory)
         {
             EnumeratedDirectories.Add(directory.FullPath);
+
+            if (ChildrenByDirectory.TryGetValue(directory.FullPath, out var customChildren))
+            {
+                return customChildren;
+            }
 
             return directory == Root
                 ? [ChildDirectory, File, .. AdditionalChildren]
