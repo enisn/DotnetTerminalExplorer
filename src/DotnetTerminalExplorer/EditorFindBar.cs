@@ -36,6 +36,8 @@ internal sealed class EditorFindBar : View
         ArgumentNullException.ThrowIfNull(textView);
         _textView = textView;
 
+        SetScheme(TuiSchemes.InputScheme);
+
         CanFocus = true;
         Height = 1;
         Width = Dim.Fill();

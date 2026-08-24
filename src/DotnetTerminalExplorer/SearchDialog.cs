@@ -11,12 +11,20 @@ namespace DotnetTerminalExplorer;
 
 internal sealed class SearchDialog : Dialog
 {
+    private const int SearchDebounceMilliseconds = 250;
+    private const int FlushIntervalMilliseconds = 100;
+    private const int FlushBatchSize = 200;
+
     private readonly ISearchService _searchService;
     private readonly string _rootPath;
     private readonly IApplication? _application;
     private readonly ObservableCollection<string> _displayList = [];
     private readonly List<SearchResult> _results = [];
+    private readonly object _pendingLock = new();
+    private readonly List<(int Generation, SearchResult Result, string DisplayLine)> _pendingResults = [];
     private CancellationTokenSource? _searchCts;
+    private System.Threading.Timer? _flushTimer;
+    private int _searchGeneration;
     private bool _isContentMode = true;
     private bool _isCaseSensitive;
     private bool _isRegex;
@@ -48,6 +56,7 @@ internal sealed class SearchDialog : Dialog
         Title = "Workspace Search";
         Width = 84;
         Height = 24;
+        SetScheme(TuiSchemes.InputScheme);
 
         var queryLabel = new Label
         {
@@ -215,14 +224,23 @@ internal sealed class SearchDialog : Dialog
 
     public void TriggerSearch()
     {
+        var generation = Interlocked.Increment(ref _searchGeneration);
+
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = new CancellationTokenSource();
         var token = _searchCts.Token;
 
-        var query = QueryInput.Text.Trim();
+        StopFlushTimer();
+        lock (_pendingLock)
+        {
+            _pendingResults.Clear();
+        }
+
         _results.Clear();
         _displayList.Clear();
+
+        var query = QueryInput.Text.Trim();
 
         if (string.IsNullOrEmpty(query))
         {
@@ -239,78 +257,184 @@ internal sealed class SearchDialog : Dialog
             RespectGitIgnore = _respectGitIgnore,
         };
 
-        StatusLabel.Text = "Searching...";
+        StatusLabel.Text = "Loading...";
         var stopwatch = Stopwatch.StartNew();
 
-        _ = Task.Run(async () =>
+        _ = RunSearchAsync(generation, token, options, stopwatch);
+    }
+
+    private async Task RunSearchAsync(
+        int generation,
+        CancellationToken token,
+        SearchOptions options,
+        Stopwatch stopwatch)
+    {
+        try
         {
-            try
+            await Task.Delay(SearchDebounceMilliseconds, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (generation != Volatile.Read(ref _searchGeneration))
+        {
+            return;
+        }
+
+        StartFlushTimer(generation, stopwatch);
+
+        try
+        {
+            await foreach (var result in _searchService.SearchAsync(_rootPath, options, token).ConfigureAwait(false))
             {
-                int count = 0;
-                await foreach (var result in _searchService.SearchAsync(_rootPath, options, token))
+                var displayLine = FormatDisplayItem(result);
+                var flushNow = false;
+
+                lock (_pendingLock)
                 {
-                    if (token.IsCancellationRequested)
+                    if (generation == Volatile.Read(ref _searchGeneration))
                     {
-                        return;
-                    }
-
-                    var displayLine = FormatDisplayItem(result);
-                    void AddAction()
-                    {
-                        _results.Add(result);
-                        _displayList.Add(displayLine);
-                        count++;
-                        StatusLabel.Text = $"Searching... found {count} matches ({stopwatch.ElapsedMilliseconds} ms)";
-                    }
-
-                    if (_application is not null)
-                    {
-                        _application.Invoke(AddAction);
-                    }
-                    else
-                    {
-                        AddAction();
+                        _pendingResults.Add((generation, result, displayLine));
+                        flushNow = _pendingResults.Count >= FlushBatchSize;
                     }
                 }
 
-                void CompleteAction()
+                if (flushNow)
                 {
-                    stopwatch.Stop();
-                    StatusLabel.Text = _results.Count == 0
-                        ? $"No matches found ({stopwatch.ElapsedMilliseconds} ms)"
-                        : $"Found {_results.Count} matches in {stopwatch.ElapsedMilliseconds} ms";
+                    FlushPendingResults(generation, stopwatch);
                 }
 
-                if (_application is not null)
+                if (token.IsCancellationRequested)
                 {
-                    _application.Invoke(CompleteAction);
-                }
-                else
-                {
-                    CompleteAction();
+                    return;
                 }
             }
-            catch (OperationCanceledException)
+
+            StopFlushTimer();
+            FlushPendingResults(generation, stopwatch);
+            ShowCompletionStatus(generation, stopwatch);
+        }
+        catch (OperationCanceledException)
+        {
+            // Search was cancelled by a newer query or dialog disposal.
+        }
+        catch (Exception ex)
+        {
+            void ErrorAction()
             {
-                // Search was cancelled by a newer query
-            }
-            catch (Exception ex)
-            {
-                void ErrorAction()
+                if (generation != Volatile.Read(ref _searchGeneration))
                 {
-                    StatusLabel.Text = $"Error: {ex.Message}";
+                    return;
                 }
 
-                if (_application is not null)
-                {
-                    _application.Invoke(ErrorAction);
-                }
-                else
-                {
-                    ErrorAction();
-                }
+                StatusLabel.Text = $"Error: {ex.Message}";
             }
-        }, token);
+
+            MarshalToUi(ErrorAction);
+        }
+    }
+
+    private void FlushPendingResults(int generation, Stopwatch stopwatch)
+    {
+        List<(SearchResult Result, string DisplayLine)> batch;
+
+        lock (_pendingLock)
+        {
+            if (_pendingResults.Count == 0)
+            {
+                return;
+            }
+
+            batch = _pendingResults
+                .Where(p => p.Generation == generation)
+                .Select(p => (p.Result, p.DisplayLine))
+                .ToList();
+
+            _pendingResults.RemoveAll(p => p.Generation == generation);
+
+            if (batch.Count == 0)
+            {
+                return;
+            }
+        }
+
+        void ApplyBatch()
+        {
+            if (generation != Volatile.Read(ref _searchGeneration))
+            {
+                return;
+            }
+
+            foreach (var (result, displayLine) in batch)
+            {
+                _results.Add(result);
+                _displayList.Add(displayLine);
+            }
+
+            StatusLabel.Text = $"Searching... found {_results.Count} matches ({stopwatch.ElapsedMilliseconds} ms)";
+        }
+
+        MarshalToUi(ApplyBatch);
+    }
+
+    private void ShowCompletionStatus(int generation, Stopwatch stopwatch)
+    {
+        void CompleteAction()
+        {
+            if (generation != Volatile.Read(ref _searchGeneration))
+            {
+                return;
+            }
+
+            stopwatch.Stop();
+            StatusLabel.Text = _results.Count == 0
+                ? $"No matches found ({stopwatch.ElapsedMilliseconds} ms)"
+                : $"Found {_results.Count} matches in {stopwatch.ElapsedMilliseconds} ms";
+        }
+
+        MarshalToUi(CompleteAction);
+    }
+
+    private void MarshalToUi(Action action)
+    {
+        if (_application is not null)
+        {
+            _application.Invoke(action);
+        }
+        else
+        {
+            action();
+        }
+    }
+
+    private void StartFlushTimer(int generation, Stopwatch stopwatch)
+    {
+        StopFlushTimer();
+        _flushTimer = new System.Threading.Timer(
+            _ => FlushPendingResults(generation, stopwatch),
+            null,
+            FlushIntervalMilliseconds,
+            FlushIntervalMilliseconds);
+    }
+
+    private void StopFlushTimer()
+    {
+        _flushTimer?.Dispose();
+        _flushTimer = null;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            Interlocked.Increment(ref _searchGeneration);
+            StopFlushTimer();
+            _searchCts?.Cancel();
+        }
+
+        base.Dispose(disposing);
     }
 
     private static string FormatDisplayItem(SearchResult result)

@@ -173,11 +173,11 @@ public sealed class FastSearchEngine : ISearchService
         });
 
         // Background crawler task
-        var crawlerTask = Task.Run(() =>
+        var crawlerTask = Task.Run(async () =>
         {
             try
             {
-                CrawlFiles(rootPath, options, filter, fileChannel.Writer, cancellationToken);
+                await CrawlFilesAsync(rootPath, options, filter, fileChannel.Writer, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -216,7 +216,7 @@ public sealed class FastSearchEngine : ISearchService
         await crawlerTask.ConfigureAwait(false);
     }
 
-    private static void CrawlFiles(
+    private static async Task CrawlFilesAsync(
         string rootPath,
         SearchOptions options,
         GitIgnoreFilter? filter,
@@ -271,13 +271,15 @@ public sealed class FastSearchEngine : ISearchService
 
                     while (!writer.TryWrite(entryPath))
                     {
-                        if (!writer.WaitToWriteAsync(cancellationToken).AsTask().GetAwaiter().GetResult())
+                        if (!await writer.WaitToWriteAsync(cancellationToken).ConfigureAwait(false))
                         {
                             return;
                         }
                     }
                 }
             }
+
+            await Task.Yield();
         }
     }
 

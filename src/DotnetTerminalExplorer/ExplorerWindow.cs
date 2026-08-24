@@ -150,6 +150,8 @@ internal sealed class ExplorerWindow : Window
             Text = TextPreview.ForDirectory().Text,
         };
         Preview.SetScheme(PreviewColorScheme);
+        RenameInput.SetScheme(TuiSchemes.InputScheme);
+        CreateInput.SetScheme(TuiSchemes.InputScheme);
 
         ImagePreview = new ImagePreviewView
         {
