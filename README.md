@@ -31,19 +31,21 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 
 | Shortcut | Action |
 | --- | --- |
-| `F5` | Reload the selected file preview |
+| `F5` | Reload the selected file |
+| `Ctrl+S` | Save changes to the active file |
+| `F2` | Rename the selected file or directory inline |
 | `F8` | Open the selected file with the operating system's default application |
-| `Esc` | Quit |
+| `Esc` | Quit (or cancel inline rename) |
 
-`F8` is disabled for directories. There is no internal editor; after editing externally, press `F5` to reload the preview.
+`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels).
 
 ## Initial behavior
 
 - Directories are listed before files, and hidden entries are included.
 - Only the root's immediate children are enumerated at startup. Descendants are read when their directory is expanded.
 - Directory symlinks and reparse points inside the selected scope are shown but are not expanded.
-- File previews use synchronous `File.ReadAllText` and display read errors in the preview pane.
-- There is no file mutation, search, file watcher, binary detection, preview-size limit, or external configuration loading.
+- File previews and edits use UTF-8 text read/write with dirty state tracking.
+- There is no search, file watcher, binary detection, preview-size limit, or external configuration loading.
 
 ## Lightweight startup
 

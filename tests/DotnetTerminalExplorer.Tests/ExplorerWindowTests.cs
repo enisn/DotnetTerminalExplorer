@@ -28,18 +28,127 @@ public sealed class ExplorerWindowTests
     public void SelectingFile_UpdatesPreviewAndEditEnablement()
     {
         var tree = new FakeFileTreeService();
-        var preview = new FakePreviewService();
+        var preview = new FakeFileService();
         preview.ContentByPath[tree.File.FullPath] = "selected content";
         using var window = CreateWindow(tree, preview);
 
         window.FileTree.SelectedObject = tree.File;
 
         Assert.Equal("selected content", window.Preview.Text);
+        Assert.False(window.Preview.ReadOnly);
         Assert.True(window.EditShortcut.Enabled);
+        Assert.True(window.SaveShortcut.Enabled);
+        Assert.True(window.RenameShortcut.Enabled);
 
         window.FileTree.SelectedObject = tree.Root;
 
+        Assert.True(window.Preview.ReadOnly);
         Assert.False(window.EditShortcut.Enabled);
+        Assert.False(window.SaveShortcut.Enabled);
+        Assert.False(window.RenameShortcut.Enabled);
+    }
+
+    [Fact]
+    public void EditingPreview_UpdatesDirtyStateAndTitle()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "initial";
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.File;
+        Assert.False(window.IsDirty);
+        Assert.Equal("Preview — file.txt", window.PreviewPane.Title);
+
+        window.Preview.Text = "modified content";
+        Assert.True(window.IsDirty);
+        Assert.Equal("Preview — file.txt *", window.PreviewPane.Title);
+    }
+
+    [Fact]
+    public void SaveShortcut_SavesContentAndResetsDirtyState()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.ContentByPath[tree.File.FullPath] = "initial";
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.Preview.Text = "new content";
+        Assert.True(window.IsDirty);
+
+        window.SaveShortcut.Action!.Invoke();
+
+        Assert.False(window.IsDirty);
+        Assert.Equal("new content", preview.SavedContentByPath[tree.File.FullPath]);
+        Assert.Equal("Preview — file.txt", window.PreviewPane.Title);
+    }
+
+    [Fact]
+    public void SaveShortcut_DisplaysErrorWhenSaveFails()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService
+        {
+            SaveError = "Disk full",
+        };
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.Preview.Text = "unsaved";
+
+        window.SaveShortcut.Action!.Invoke();
+
+        Assert.Contains("Disk full", window.Preview.Text);
+    }
+
+    [Fact]
+    public void StartRename_ShowsInputWithCurrentName()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.RenameShortcut.Action!.Invoke();
+
+        Assert.True(window.RenameInput.Visible);
+        Assert.Equal("file.txt", window.RenameInput.Text);
+    }
+
+    [Fact]
+    public void CommitRename_CallsMutationServiceAndUpdatesTree()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.StartRename();
+        window.RenameInput.Text = "renamed.txt";
+
+        window.CommitRename();
+
+        Assert.False(window.RenameInput.Visible);
+        Assert.Equal(tree.File.FullPath, mutation.RenamedEntries[0].entry.FullPath);
+        Assert.Equal("renamed.txt", mutation.RenamedEntries[0].newName);
+        Assert.Equal("renamed.txt", window.FileTree.SelectedObject?.Name);
+    }
+
+    [Fact]
+    public void CancelRename_HidesInputWithoutModifying()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+
+        window.FileTree.SelectedObject = tree.File;
+        window.StartRename();
+        window.RenameInput.Text = "canceled.txt";
+
+        window.CancelRename();
+
+        Assert.False(window.RenameInput.Visible);
+        Assert.Empty(mutation.RenamedEntries);
     }
 
     [Fact]
@@ -84,7 +193,7 @@ public sealed class ExplorerWindowTests
     public void ReloadShortcut_RereadsOnlySelectedFile()
     {
         var tree = new FakeFileTreeService();
-        var preview = new FakePreviewService();
+        var preview = new FakeFileService();
         preview.ContentByPath[tree.File.FullPath] = "before";
         using var window = CreateWindow(tree, preview);
         window.FileTree.SelectedObject = tree.File;
@@ -131,7 +240,7 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
-    public void StatusBar_DefinesReloadEditAndQuitShortcuts()
+    public void StatusBar_DefinesReloadSaveRenameEditAndQuitShortcuts()
     {
         var quitInvocations = 0;
         using var window = CreateWindow(
@@ -141,8 +250,16 @@ public sealed class ExplorerWindowTests
         Assert.Equal(Key.F5, window.ReloadShortcut.Key);
         Assert.Equal("Reload", window.ReloadShortcut.Title);
         Assert.True(window.ReloadShortcut.BindKeyToApplication);
+
+        Assert.Equal(Key.S.WithCtrl, window.SaveShortcut.Key);
+        Assert.Equal("Save", window.SaveShortcut.Title);
+
+        Assert.Equal(Key.F2, window.RenameShortcut.Key);
+        Assert.Equal("Rename", window.RenameShortcut.Title);
+
         Assert.Equal(Key.F8, window.EditShortcut.Key);
-        Assert.Equal("Edit", window.EditShortcut.Title);
+        Assert.Equal("Edit Ext.", window.EditShortcut.Title);
+
         Assert.Equal(Key.Esc, window.QuitShortcut.Key);
         Assert.Equal("Quit", window.QuitShortcut.Title);
 
@@ -153,14 +270,16 @@ public sealed class ExplorerWindowTests
 
     private static ExplorerWindow CreateWindow(
         FakeFileTreeService tree,
-        FakePreviewService? preview = null,
+        FakeFileService? preview = null,
         FakeLauncher? launcher = null,
-        Action? requestStop = null) =>
+        Action? requestStop = null,
+        FakeMutationService? mutationService = null) =>
         new(
             tree,
-            preview ?? new FakePreviewService(),
+            preview ?? new FakeFileService(),
             launcher ?? new FakeLauncher(),
-            requestStop ?? (() => { }));
+            requestStop ?? (() => { }),
+            mutationService ?? new FakeMutationService());
 
     private sealed class FakeFileTreeService : IFileTreeService
     {
@@ -203,11 +322,15 @@ public sealed class ExplorerWindowTests
         }
     }
 
-    private sealed class FakePreviewService : ITextPreviewService
+    private sealed class FakeFileService : ITextFileService
     {
         public Dictionary<string, string> ContentByPath { get; } = [];
 
+        public Dictionary<string, string> SavedContentByPath { get; } = [];
+
         public List<string> ReadPaths { get; } = [];
+
+        public string? SaveError { get; init; }
 
         public TextPreview Read(FileSystemEntry entry)
         {
@@ -216,6 +339,37 @@ public sealed class ExplorerWindowTests
             return entry.IsDirectory
                 ? TextPreview.ForDirectory()
                 : TextPreview.FromContent(ContentByPath.GetValueOrDefault(entry.FullPath, "preview"));
+        }
+
+        public FileSaveResult Save(FileSystemEntry entry, string content)
+        {
+            if (SaveError is not null)
+            {
+                return FileSaveResult.Failed(SaveError);
+            }
+
+            SavedContentByPath[entry.FullPath] = content;
+            return FileSaveResult.Successful();
+        }
+    }
+
+    private sealed class FakeMutationService : IFileMutationService
+    {
+        public List<(FileSystemEntry entry, string newName)> RenamedEntries { get; } = [];
+
+        public string? RenameError { get; init; }
+
+        public FileRenameResult Rename(FileSystemEntry entry, string newName)
+        {
+            if (RenameError is not null)
+            {
+                return FileRenameResult.Failed(RenameError);
+            }
+
+            RenamedEntries.Add((entry, newName));
+            var newPath = Path.Combine(Path.GetDirectoryName(entry.FullPath) ?? "", newName);
+            var updated = new FileSystemEntry(newPath, newName, entry.Kind, entry.IsReparsePoint);
+            return FileRenameResult.Successful(updated);
         }
     }
 

@@ -8,15 +8,17 @@ internal static class TerminalExplorerRunner
     public static void Run(string rootDirectory)
     {
         var fileTree = new FileTreeService(rootDirectory);
-        var preview = new TextPreviewService();
+        var fileService = new TextFileService();
         var launcher = new DefaultFileLauncher();
+        var mutationService = new FileMutationService();
 
         using var application = Application.Create().Init();
         using var window = new ExplorerWindow(
             fileTree,
-            preview,
+            fileService,
             launcher,
-            application.RequestStop);
+            application.RequestStop,
+            mutationService);
 
         application.Run(window);
     }
