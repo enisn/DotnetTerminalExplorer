@@ -131,6 +131,7 @@ internal sealed class ExplorerWindow : Window
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             Visible = false,
+            UiInvoker = InvokeOnUi,
         };
 
         FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
@@ -318,12 +319,23 @@ internal sealed class ExplorerWindow : Window
         var preview = await Task.Run(() => ReadPreviewSafely(entry, forceLoad));
         try
         {
-            Application.Invoke(() => ApplyPreview(entry, version, preview));
+            InvokeOnUi(() => ApplyPreview(entry, version, preview));
         }
         catch
         {
             // The application was shut down while loading; nothing to update.
         }
+    }
+
+    private static void InvokeOnUi(Action action)
+    {
+        if (!Application.Initialized)
+        {
+            action();
+            return;
+        }
+
+        Application.Invoke(action);
     }
 
     private TextPreview ReadPreviewSafely(FileSystemEntry entry, bool forceLoad)

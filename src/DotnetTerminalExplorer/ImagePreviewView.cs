@@ -23,12 +23,18 @@ internal sealed class ImagePreviewView : View
     private Image<Rgba32>? _cachedThumbnail;
     private int _cachedWidth;
     private int _cachedHeight;
+    private int _decodeVersion;
+    private string? _pendingDecodePath;
+    private int _pendingDecodeWidth;
+    private int _pendingDecodeHeight;
 
     public ImagePreviewView()
     {
         CanFocus = false;
         DrawingContent += (_, e) => DrawImageContent();
     }
+
+    internal Action<Action>? UiInvoker { get; set; }
 
     public void SetImage(string? filePath, string? headerInfo)
     {
@@ -39,6 +45,7 @@ internal sealed class ImagePreviewView : View
 
         _filePath = filePath;
         _headerInfo = headerInfo;
+        _decodeVersion++;
         ClearCache();
         SetNeedsDraw();
     }
@@ -47,6 +54,7 @@ internal sealed class ImagePreviewView : View
     {
         _filePath = null;
         _headerInfo = null;
+        _decodeVersion++;
         ClearCache();
         SetNeedsDraw();
     }
@@ -90,6 +98,13 @@ internal sealed class ImagePreviewView : View
 
         if (_cachedThumbnail is null)
         {
+            if (!string.IsNullOrEmpty(_filePath) && _pendingDecodePath == _filePath)
+            {
+                SetAttribute(DimHeaderAttribute);
+                Move(0, 1);
+                AddStr("Decoding image...");
+            }
+
             return true;
         }
 
@@ -137,6 +152,12 @@ internal sealed class ImagePreviewView : View
             return;
         }
 
+        if (_pendingDecodePath == _filePath && _pendingDecodeWidth == targetPixelWidth && _pendingDecodeHeight == targetPixelHeight)
+        {
+            // A decode for this exact target is already in flight.
+            return;
+        }
+
         ClearCache();
 
         if (string.IsNullOrEmpty(_filePath) || !File.Exists(_filePath))
@@ -144,24 +165,76 @@ internal sealed class ImagePreviewView : View
             return;
         }
 
+        var version = ++_decodeVersion;
+        var filePath = _filePath;
+        _pendingDecodePath = filePath;
+        _pendingDecodeWidth = targetPixelWidth;
+        _pendingDecodeHeight = targetPixelHeight;
+
+        if (UiInvoker is null)
+        {
+            // No UI loop is available (unit tests); decode synchronously.
+            StoreThumbnail(version, filePath, DecodeThumbnail(filePath, targetPixelWidth, targetPixelHeight), targetPixelWidth, targetPixelHeight);
+            return;
+        }
+
+        _ = DecodeThumbnailAsync(UiInvoker, filePath, targetPixelWidth, targetPixelHeight, version);
+    }
+
+    private async Task DecodeThumbnailAsync(Action<Action> invoker, string filePath, int targetPixelWidth, int targetPixelHeight, int version)
+    {
+        var thumbnail = await Task.Run(() => DecodeThumbnail(filePath, targetPixelWidth, targetPixelHeight));
         try
         {
-            using var original = Image.Load<Rgba32>(_filePath);
-            var resized = original.Clone(ctx => ctx.Resize(new ResizeOptions
+            invoker(() => StoreThumbnail(version, filePath, thumbnail, targetPixelWidth, targetPixelHeight));
+        }
+        catch
+        {
+            // The application was shut down while decoding; dispose and ignore.
+            thumbnail?.Dispose();
+        }
+    }
+
+    private static Image<Rgba32>? DecodeThumbnail(string filePath, int targetPixelWidth, int targetPixelHeight)
+    {
+        try
+        {
+            using var original = Image.Load<Rgba32>(filePath);
+            return original.Clone(ctx => ctx.Resize(new ResizeOptions
             {
                 Size = new Size(targetPixelWidth, targetPixelHeight),
                 Mode = ResizeMode.Max,
                 Sampler = KnownResamplers.Bicubic,
             }));
-
-            _cachedThumbnail = resized;
-            _cachedWidth = targetPixelWidth;
-            _cachedHeight = targetPixelHeight;
         }
         catch
         {
-            _cachedThumbnail = null;
+            return null;
         }
+    }
+
+    private void StoreThumbnail(int version, string filePath, Image<Rgba32>? thumbnail, int targetPixelWidth, int targetPixelHeight)
+    {
+        if (version != _decodeVersion || _filePath != filePath)
+        {
+            // A newer selection or resize superseded this decode.
+            thumbnail?.Dispose();
+            return;
+        }
+
+        _pendingDecodePath = null;
+        _pendingDecodeWidth = 0;
+        _pendingDecodeHeight = 0;
+
+        if (thumbnail is null)
+        {
+            return;
+        }
+
+        _cachedThumbnail = thumbnail;
+        _cachedWidth = targetPixelWidth;
+        _cachedHeight = targetPixelHeight;
+        SetNeedsDraw();
     }
 
     private void ClearCache()
@@ -176,6 +249,7 @@ internal sealed class ImagePreviewView : View
     {
         if (disposing)
         {
+            _decodeVersion++;
             ClearCache();
         }
         base.Dispose(disposing);
