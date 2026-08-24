@@ -33,12 +33,20 @@ internal sealed class ExplorerWindow : Window
         Disabled = PreviewContentAttribute,
     };
 
+    public const int DefaultMinLeftPaneWidth = 24;
+    public const int DefaultMaxLeftPaneWidth = 48;
+    public const int MinLeftPaneWidth = 18;
+    public const int MinRightPaneWidth = 20;
+
     private readonly IFileTreeService _fileTreeService;
     private readonly IDefaultFileLauncher _launcher;
     private readonly ITextPreviewService _previewService;
     private readonly IFileMutationService _mutationService;
     private readonly Func<FileSystemEntry, bool> _confirmDelete;
+    private readonly Action _showHelp;
+    private readonly IApplication? _application;
 
+    private int? _customLeftPaneWidth;
     private FileSystemEntry? _loadedEntry;
     private string _savedContent = string.Empty;
     private FileSystemEntry? _renamingEntry;
@@ -53,7 +61,9 @@ internal sealed class ExplorerWindow : Window
         IDefaultFileLauncher launcher,
         Action requestStop,
         IFileMutationService? mutationService = null,
-        Func<FileSystemEntry, bool>? confirmDelete = null)
+        Func<FileSystemEntry, bool>? confirmDelete = null,
+        Action? showHelp = null,
+        IApplication? application = null)
     {
         ArgumentNullException.ThrowIfNull(fileTree);
         ArgumentNullException.ThrowIfNull(previewService);
@@ -65,6 +75,8 @@ internal sealed class ExplorerWindow : Window
         _launcher = launcher;
         _mutationService = mutationService ?? new FileMutationService();
         _confirmDelete = confirmDelete ?? ConfirmDeleteViaMessageBox;
+        _showHelp = showHelp ?? ShowHelpViaDialog;
+        _application = application;
 
         Title = ProductInfo.Name;
         X = 0;
@@ -78,7 +90,7 @@ internal sealed class ExplorerWindow : Window
             Title = "Files",
             X = 0,
             Y = 0,
-            Width = Dim.Percent(35),
+            Width = Dim.Func(_ => GetCalculatedLeftPaneWidth()),
             Height = Dim.Fill(StatusBar),
         };
         PreviewPane = new FrameView
@@ -134,11 +146,25 @@ internal sealed class ExplorerWindow : Window
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             Visible = false,
-            UiInvoker = InvokeOnUi,
+            UiInvoker = _application is null ? null : _application.Invoke,
         };
 
         FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
         Preview.ContentsChanged += (_, _) => UpdatePreviewTitle();
+
+        KeyDown += (sender, keyEvent) =>
+        {
+            if (keyEvent == Key.CursorLeft.WithAlt || keyEvent == new Key('[').WithAlt)
+            {
+                ShrinkLeftPane();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.CursorRight.WithAlt || keyEvent == new Key(']').WithAlt)
+            {
+                ExpandLeftPane();
+                keyEvent.Handled = true;
+            }
+        };
 
         RenameInput.KeyDown += (sender, keyEvent) =>
         {
@@ -193,6 +219,8 @@ internal sealed class ExplorerWindow : Window
 
     internal StatusBar StatusBar { get; }
 
+    internal Shortcut HelpShortcut { get; private set; } = null!;
+
     internal Shortcut ReloadShortcut { get; private set; } = null!;
 
     internal Shortcut SaveShortcut { get; private set; } = null!;
@@ -209,6 +237,10 @@ internal sealed class ExplorerWindow : Window
 
     internal Shortcut QuitShortcut { get; private set; } = null!;
 
+    public int? CustomLeftPaneWidth => _customLeftPaneWidth;
+
+    public int CalculatedLeftPaneWidth => GetCalculatedLeftPaneWidth();
+
     public bool IsDirty =>
         _loadedEntry is { IsDirectory: false }
         && _previewService is ITextFileService
@@ -218,8 +250,66 @@ internal sealed class ExplorerWindow : Window
 
     public FileSystemEntry? LoadedEntry => _loadedEntry;
 
+    public int GetCalculatedLeftPaneWidth()
+    {
+        var totalWidth = Viewport.Width > 0 ? Viewport.Width : 80;
+        var minW = Math.Min(MinLeftPaneWidth, Math.Max(10, totalWidth / 2));
+        var maxW = Math.Max(minW, totalWidth - MinRightPaneWidth);
+
+        if (_customLeftPaneWidth.HasValue)
+        {
+            return Math.Clamp(_customLeftPaneWidth.Value, minW, maxW);
+        }
+
+        var defaultWidth = (int)Math.Round(totalWidth * 0.35);
+        return Math.Clamp(defaultWidth, DefaultMinLeftPaneWidth, Math.Min(DefaultMaxLeftPaneWidth, maxW));
+    }
+
+    public void ShrinkLeftPane(int amount = 4)
+    {
+        var current = GetCalculatedLeftPaneWidth();
+        var totalWidth = Viewport.Width > 0 ? Viewport.Width : 80;
+        var minW = Math.Min(MinLeftPaneWidth, Math.Max(10, totalWidth / 2));
+        _customLeftPaneWidth = Math.Max(minW, current - amount);
+        FileTreePane.SetNeedsLayout();
+        PreviewPane.SetNeedsLayout();
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    public void ExpandLeftPane(int amount = 4)
+    {
+        var current = GetCalculatedLeftPaneWidth();
+        var totalWidth = Viewport.Width > 0 ? Viewport.Width : 80;
+        var minW = Math.Min(MinLeftPaneWidth, Math.Max(10, totalWidth / 2));
+        var maxW = Math.Max(minW, totalWidth - MinRightPaneWidth);
+        _customLeftPaneWidth = Math.Min(maxW, current + amount);
+        FileTreePane.SetNeedsLayout();
+        PreviewPane.SetNeedsLayout();
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    public void ResetLeftPaneWidth()
+    {
+        _customLeftPaneWidth = null;
+        FileTreePane.SetNeedsLayout();
+        PreviewPane.SetNeedsLayout();
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    public void ShowHelp()
+    {
+        _showHelp();
+    }
+
     private StatusBar CreateStatusBar(Action requestStop)
     {
+        HelpShortcut = new Shortcut(Key.F1, "Help", ShowHelp)
+        {
+            BindKeyToApplication = true,
+        };
         ReloadShortcut = new Shortcut(Key.F5, "Reload", ReloadSelected)
         {
             BindKeyToApplication = true,
@@ -259,6 +349,7 @@ internal sealed class ExplorerWindow : Window
         };
 
         return new StatusBar([
+            HelpShortcut,
             ReloadShortcut,
             SaveShortcut,
             LoadShortcut,
@@ -307,38 +398,27 @@ internal sealed class ExplorerWindow : Window
 
     private void LoadPreview(FileSystemEntry entry, bool forceLoad, int version)
     {
-        if (!Application.Initialized)
+        if (_application is null)
         {
-            // No main loop is running (unit tests); load synchronously.
+            // No application instance is available (unit tests); load synchronously.
             ApplyPreview(entry, version, ReadPreviewSafely(entry, forceLoad));
             return;
         }
 
-        _ = LoadPreviewAsync(entry, forceLoad, version);
+        _ = LoadPreviewAsync(_application, entry, forceLoad, version);
     }
 
-    private async Task LoadPreviewAsync(FileSystemEntry entry, bool forceLoad, int version)
+    private async Task LoadPreviewAsync(IApplication application, FileSystemEntry entry, bool forceLoad, int version)
     {
         var preview = await Task.Run(() => ReadPreviewSafely(entry, forceLoad));
         try
         {
-            InvokeOnUi(() => ApplyPreview(entry, version, preview));
+            application.Invoke(() => ApplyPreview(entry, version, preview));
         }
         catch
         {
             // The application was shut down while loading; nothing to update.
         }
-    }
-
-    private static void InvokeOnUi(Action action)
-    {
-        if (!Application.Initialized)
-        {
-            action();
-            return;
-        }
-
-        Application.Invoke(action);
     }
 
     private TextPreview ReadPreviewSafely(FileSystemEntry entry, bool forceLoad)
@@ -578,11 +658,11 @@ internal sealed class ExplorerWindow : Window
         }
     }
 
-    private static bool ConfirmDeleteViaMessageBox(FileSystemEntry entry)
+    private bool ConfirmDeleteViaMessageBox(FileSystemEntry entry)
     {
-        if (!Application.Initialized || Application.Instance is null)
+        if (_application is null)
         {
-            // No main loop is running (unit tests); proceed without a modal.
+            // No application instance is available (unit tests); proceed without a modal.
             return true;
         }
 
@@ -590,12 +670,74 @@ internal sealed class ExplorerWindow : Window
             ? $"Delete directory '{entry.Name}' and all of its contents?"
             : $"Delete '{entry.Name}'?";
         var choice = MessageBox.Query(
-            Application.Instance,
+            _application,
             "Delete",
             message,
             "Delete",
             "Cancel");
         return choice == 0;
+    }
+
+    private void ShowHelpViaDialog()
+    {
+        if (_application is null)
+        {
+            // No application instance is available (unit tests); proceed without a modal.
+            return;
+        }
+
+        const string helpText =
+            "Dotnet Terminal Explorer (dte)\n\n" +
+            "Navigation & Layout:\n" +
+            "  Tab               Switch focus between Files tree and Preview pane\n" +
+            "  Alt+Left / Alt+[  Shrink the left Files panel\n" +
+            "  Alt+Right / Alt+] Expand the left Files panel\n" +
+            "  Up / Down / Enter Navigate directories and select files\n\n" +
+            "File Operations:\n" +
+            "  Ctrl+S            Save modifications to the active file\n" +
+            "  Ctrl+N            Create a new file in the selected directory\n" +
+            "  F2                Rename the selected file or directory inline\n" +
+            "  Del               Delete the selected file or directory\n" +
+            "  F5                Reload the selected file from disk\n" +
+            "  Ctrl+L            Load a large file (> 2 MB) on demand\n" +
+            "  F8                Open selected file with default OS application\n\n" +
+            "General:\n" +
+            "  F1                Show this help dialog\n" +
+            "  Esc               Quit application (or cancel inline input / dialog)\n";
+
+        var dialog = new Dialog
+        {
+            Title = "Keyboard Shortcuts & Help",
+            Width = 76,
+            Height = 22,
+        };
+
+        var label = new Label
+        {
+            X = 1,
+            Y = 0,
+            Width = Dim.Fill(1),
+            Height = Dim.Fill(1),
+            TextAlignment = Alignment.Start,
+            Text = helpText,
+        };
+
+        var closeButton = new Button
+        {
+            Text = "Close",
+            IsDefault = true,
+        };
+
+        closeButton.Accepting += (s, e) =>
+        {
+            dialog.RequestStop();
+            e.Handled = true;
+        };
+
+        dialog.AddButton(closeButton);
+        dialog.Add(label);
+
+        _application.Run(dialog);
     }
 
     private void EditSelected()

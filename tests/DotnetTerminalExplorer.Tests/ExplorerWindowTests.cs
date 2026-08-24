@@ -11,15 +11,15 @@ namespace DotnetTerminalExplorer.Tests;
 public sealed class ExplorerWindowTests
 {
     [Fact]
-    public void Constructor_ComposesThirtyFiveSixtyFiveColumnsAndExpandsOnlyRoot()
+    public void Constructor_ComposesClampedColumnsAndExpandsOnlyRoot()
     {
         var tree = new FakeFileTreeService();
 
         using var window = CreateWindow(tree);
 
-        var leftWidth = Assert.IsType<DimPercent>(window.FileTreePane.Width);
-        Assert.Equal(35, leftWidth.Percentage);
+        Assert.IsType<DimFunc>(window.FileTreePane.Width);
         Assert.IsType<DimFill>(window.PreviewPane.Width);
+        Assert.Equal(window.CalculatedLeftPaneWidth, window.GetCalculatedLeftPaneWidth());
         Assert.Equal(2, window.SubViews.Count(view => view != window.StatusBar));
         Assert.Equal([tree.Root.FullPath], tree.EnumeratedDirectories);
     }
@@ -512,12 +512,16 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
-    public void StatusBar_DefinesReloadSaveNewRenameDeleteEditAndQuitShortcuts()
+    public void StatusBar_DefinesHelpReloadSaveNewRenameDeleteEditAndQuitShortcuts()
     {
         var quitInvocations = 0;
         using var window = CreateWindow(
             new FakeFileTreeService(),
             requestStop: () => quitInvocations++);
+
+        Assert.Equal(Key.F1, window.HelpShortcut.Key);
+        Assert.Equal("Help", window.HelpShortcut.Title);
+        Assert.True(window.HelpShortcut.BindKeyToApplication);
 
         Assert.Equal(Key.F5, window.ReloadShortcut.Key);
         Assert.Equal("Reload", window.ReloadShortcut.Title);
@@ -547,6 +551,71 @@ public sealed class ExplorerWindowTests
         window.QuitShortcut.Action!.Invoke();
 
         Assert.Equal(1, quitInvocations);
+    }
+
+    [Fact]
+    public void HelpShortcut_InvokesShowHelpDelegate()
+    {
+        var helpInvocations = 0;
+        using var window = CreateWindow(
+            new FakeFileTreeService(),
+            showHelp: () => helpInvocations++);
+
+        window.HelpShortcut.Action!.Invoke();
+
+        Assert.Equal(1, helpInvocations);
+    }
+
+    [Theory]
+    [InlineData(60, 24)]   // Min clamp (default min is 24)
+    [InlineData(80, 28)]   // 80 * 0.35 = 28
+    [InlineData(100, 35)]  // 100 * 0.35 = 35
+    [InlineData(200, 48)]  // Max clamp (default max is 48 on ultrawide)
+    [InlineData(300, 48)]  // Max clamp on 300-col screen
+    public void GetCalculatedLeftPaneWidth_ClampsOnWideAndNarrowScreens(int terminalWidth, int expectedWidth)
+    {
+        using var window = CreateWindow(new FakeFileTreeService());
+        window.Viewport = new System.Drawing.Rectangle(0, 0, terminalWidth, 24);
+
+        var calculated = window.GetCalculatedLeftPaneWidth();
+
+        Assert.Equal(expectedWidth, calculated);
+    }
+
+    [Fact]
+    public void ShrinkAndExpandLeftPane_AdjustsWidthWithinBounds()
+    {
+        using var window = CreateWindow(new FakeFileTreeService());
+        window.Viewport = new System.Drawing.Rectangle(0, 0, 80, 24);
+
+        // Initial default: 28
+        Assert.Equal(28, window.GetCalculatedLeftPaneWidth());
+        Assert.Null(window.CustomLeftPaneWidth);
+
+        // Expand by 4 -> 32
+        window.ExpandLeftPane(4);
+        Assert.Equal(32, window.CustomLeftPaneWidth);
+        Assert.Equal(32, window.GetCalculatedLeftPaneWidth());
+
+        // Shrink by 8 -> 24
+        window.ShrinkLeftPane(8);
+        Assert.Equal(24, window.CustomLeftPaneWidth);
+        Assert.Equal(24, window.GetCalculatedLeftPaneWidth());
+
+        // Shrink below MinLeftPaneWidth (18) -> clamped to 18
+        window.ShrinkLeftPane(20);
+        Assert.Equal(ExplorerWindow.MinLeftPaneWidth, window.CustomLeftPaneWidth);
+        Assert.Equal(ExplorerWindow.MinLeftPaneWidth, window.GetCalculatedLeftPaneWidth());
+
+        // Expand above max (80 - 20 = 60) -> clamped to 60
+        window.ExpandLeftPane(100);
+        Assert.Equal(60, window.CustomLeftPaneWidth);
+        Assert.Equal(60, window.GetCalculatedLeftPaneWidth());
+
+        // Reset to default
+        window.ResetLeftPaneWidth();
+        Assert.Null(window.CustomLeftPaneWidth);
+        Assert.Equal(28, window.GetCalculatedLeftPaneWidth());
     }
 
     [Fact]
@@ -609,14 +678,16 @@ public sealed class ExplorerWindowTests
         FakeLauncher? launcher = null,
         Action? requestStop = null,
         FakeMutationService? mutationService = null,
-        Func<FileSystemEntry, bool>? confirmDelete = null) =>
+        Func<FileSystemEntry, bool>? confirmDelete = null,
+        Action? showHelp = null) =>
         new(
             tree,
             preview ?? new FakeFileService(),
             launcher ?? new FakeLauncher(),
             requestStop ?? (() => { }),
             mutationService ?? new FakeMutationService(),
-            confirmDelete);
+            confirmDelete,
+            showHelp);
 
     private sealed class FakeFileTreeService : IFileTreeService
     {

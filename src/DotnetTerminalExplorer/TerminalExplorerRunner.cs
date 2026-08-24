@@ -18,7 +18,8 @@ internal static class TerminalExplorerRunner
             fileService,
             launcher,
             application.RequestStop,
-            mutationService);
+            mutationService,
+            application: application);
 
         application.Run(window);
     }

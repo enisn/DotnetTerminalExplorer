@@ -79,6 +79,9 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 
 | Shortcut | Action |
 | --- | --- |
+| `F1` | Show the Keyboard Shortcuts & Help dialog |
+| `Alt+Left` / `Alt+[` | Shrink the left Files panel width |
+| `Alt+Right` / `Alt+]` | Expand the left Files panel width |
 | `F5` | Reload the selected file |
 | `Ctrl+S` | Save changes to the active file |
 | `Ctrl+L` | Load a large file that was skipped automatically |
@@ -86,9 +89,11 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `F2` | Rename the selected file or directory inline |
 | `Del` | Delete the selected file or directory (asks for confirmation) |
 | `F8` | Open the selected file with the operating system's default application |
-| `Esc` | Quit (or cancel inline input) |
+| `Esc` | Quit (or cancel inline input / dialog) |
 
-`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory after confirming in a modal dialog.
+`F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory after confirming in a modal dialog. Press `F1` at any time to open the full help dialog.
+
+On ultra-wide terminals, the left file panel is automatically clamped (to 24–48 columns by default) to keep the preview pane spacious. You can manually adjust the width at any time with `Alt+Left` / `Alt+Right` (or `Alt+[` / `Alt+]`).
 
 File previews load asynchronously so navigating the tree never blocks. Files larger than 2 MB are not read automatically; the preview shows file metadata instead and `Ctrl+L` loads them on demand.
 
