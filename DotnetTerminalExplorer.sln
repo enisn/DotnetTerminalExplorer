@@ -1,0 +1,36 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetTerminalExplorer.Core", "src\DotnetTerminalExplorer.Core\DotnetTerminalExplorer.Core.csproj", "{5D93B7CD-8468-4C43-902F-36247375AB9C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetTerminalExplorer", "src\DotnetTerminalExplorer\DotnetTerminalExplorer.csproj", "{182465CB-EA45-426F-94E4-E110C26EB3F3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetTerminalExplorer.Core.Tests", "tests\DotnetTerminalExplorer.Core.Tests\DotnetTerminalExplorer.Core.Tests.csproj", "{514C452A-C03A-4B60-8AEB-3848B467905E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotnetTerminalExplorer.Tests", "tests\DotnetTerminalExplorer.Tests\DotnetTerminalExplorer.Tests.csproj", "{EB61F0A4-2A7F-46D1-9741-C0F0A15C8D0D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5D93B7CD-8468-4C43-902F-36247375AB9C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D93B7CD-8468-4C43-902F-36247375AB9C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D93B7CD-8468-4C43-902F-36247375AB9C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D93B7CD-8468-4C43-902F-36247375AB9C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{182465CB-EA45-426F-94E4-E110C26EB3F3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{182465CB-EA45-426F-94E4-E110C26EB3F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{182465CB-EA45-426F-94E4-E110C26EB3F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{182465CB-EA45-426F-94E4-E110C26EB3F3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{514C452A-C03A-4B60-8AEB-3848B467905E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{514C452A-C03A-4B60-8AEB-3848B467905E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{514C452A-C03A-4B60-8AEB-3848B467905E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{514C452A-C03A-4B60-8AEB-3848B467905E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EB61F0A4-2A7F-46D1-9741-C0F0A15C8D0D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EB61F0A4-2A7F-46D1-9741-C0F0A15C8D0D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EB61F0A4-2A7F-46D1-9741-C0F0A15C8D0D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EB61F0A4-2A7F-46D1-9741-C0F0A15C8D0D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

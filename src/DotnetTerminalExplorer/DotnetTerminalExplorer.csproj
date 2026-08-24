@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>DotnetTerminalExplorer</AssemblyName>
+    <RootNamespace>DotnetTerminalExplorer</RootNamespace>
+    <Version>0.1.0</Version>
+
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>dte</ToolCommandName>
+    <PackageId>DotnetTerminalExplorer</PackageId>
+    <PackageOutputPath>../../nupkg</PackageOutputPath>
+
+    <Authors>enisn</Authors>
+    <Description>A lightweight file explorer for the terminal.</Description>
+    <PackageTags>dotnet-tool;terminal;tui;file-explorer</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/enisn/DotnetTerminalExplorer</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CliFx" />
+    <PackageReference Include="Terminal.Gui" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DotnetTerminalExplorer.Core/DotnetTerminalExplorer.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
+
