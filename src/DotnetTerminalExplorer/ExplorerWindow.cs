@@ -207,6 +207,31 @@ internal sealed class ExplorerWindow : Window
                 OpenWorkspaceSearch();
                 keyEvent.Handled = true;
             }
+            else if (keyEvent == Key.F5)
+            {
+                ReloadSelected();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.F2)
+            {
+                StartRename();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.Delete)
+            {
+                DeleteSelected();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.F8)
+            {
+                EditSelected();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.L.WithCtrl)
+            {
+                LoadSelected();
+                keyEvent.Handled = true;
+            }
         };
 
         RenameInput.KeyDown += (sender, keyEvent) =>
@@ -407,13 +432,8 @@ internal sealed class ExplorerWindow : Window
         return new StatusBar([
             HelpShortcut,
             SearchShortcut,
-            ReloadShortcut,
             SaveShortcut,
-            LoadShortcut,
             NewFileShortcut,
-            RenameShortcut,
-            DeleteShortcut,
-            EditShortcut,
             QuitShortcut
         ]);
     }
