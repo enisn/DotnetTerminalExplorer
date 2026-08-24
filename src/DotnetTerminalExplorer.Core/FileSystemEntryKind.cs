@@ -4,4 +4,5 @@ public enum FileSystemEntryKind
 {
     File,
     Directory,
+    LoadMore,
 }

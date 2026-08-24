@@ -4,6 +4,7 @@ using DotnetTerminalExplorer.Core;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
+using Terminal.Gui.Views;
 using TuiAttribute = Terminal.Gui.Drawing.Attribute;
 
 namespace DotnetTerminalExplorer.Tests;
@@ -112,6 +113,198 @@ public sealed class ExplorerWindowTests
         Assert.Equal("preview", window.Preview.Text);
         Assert.False(window.Preview.ReadOnly);
         Assert.False(window.LoadShortcut.Enabled);
+    }
+
+    [Fact]
+    public void CtrlRight_IsReboundFromRecursiveExpandToSingleLevel()
+    {
+        using var window = CreateWindow(new FakeFileTreeService());
+        var defaults = TreeView<FileSystemEntry>.DefaultKeyBindings;
+
+        Assert.True(defaults.TryGetValue(Command.ExpandAll, out var expandAll));
+        Assert.DoesNotContain(Key.CursorRight.WithCtrl, expandAll.All ?? []);
+
+        Assert.True(defaults.TryGetValue(Command.Expand, out var expand));
+        Assert.Contains(Key.CursorRight.WithCtrl, expand.All ?? []);
+    }
+
+    [Fact]
+    public void GetChildren_LargeDirectoriesArePagedWithLoadMoreSentinel()
+    {
+        var tree = new FakeFileTreeService { PageSize = 1 };
+        var builder = new FileSystemTreeBuilder(tree);
+
+        var children = builder.GetChildren(tree.Root).ToArray();
+
+        Assert.Equal(2, children.Length);
+        Assert.Equal(tree.ChildDirectory, children[0]);
+        Assert.Equal(FileSystemEntryKind.LoadMore, children[1].Kind);
+        Assert.False(builder.CanExpand(children[1]));
+    }
+
+    [Fact]
+    public void TryAdvance_LoadsNextPageAndKeepsSentinelUntilExhausted()
+    {
+        var tree = new FakeFileTreeService { PageSize = 1 };
+        tree.AdditionalChildren.Add(new FileSystemEntry(
+            "/scope/extra.txt",
+            "extra.txt",
+            FileSystemEntryKind.File,
+            IsReparsePoint: false));
+        var builder = new FileSystemTreeBuilder(tree);
+
+        _ = builder.GetChildren(tree.Root).ToArray();
+
+        var sentinel = builder.GetLoadMoreNode(tree.Root);
+        Assert.NotNull(sentinel);
+
+        Assert.True(builder.TryAdvance(sentinel!, out var parent));
+        Assert.Equal(tree.Root, parent);
+
+        var children = builder.GetChildren(tree.Root).ToArray();
+        Assert.Equal(3, children.Length);
+        Assert.Equal(FileSystemEntryKind.LoadMore, children[^1].Kind);
+
+        Assert.True(builder.TryAdvance(sentinel!, out _));
+        Assert.False(builder.TryAdvance(sentinel!, out _));
+
+        children = builder.GetChildren(tree.Root).ToArray();
+        Assert.Equal(
+            [tree.ChildDirectory, tree.File, tree.AdditionalChildren[0]],
+            children);
+    }
+
+    [Fact]
+    public void GetChildren_ServesCachedPagesWithoutReenumerating()
+    {
+        var tree = new FakeFileTreeService { PageSize = 1 };
+        var builder = new FileSystemTreeBuilder(tree);
+
+        _ = builder.GetChildren(tree.Root).ToArray();
+        var readsAfterFirstLoad = tree.EnumeratedDirectories.Count;
+
+        _ = builder.GetChildren(tree.Root).ToArray();
+
+        Assert.Equal(readsAfterFirstLoad, tree.EnumeratedDirectories.Count);
+
+        builder.Invalidate(tree.Root.FullPath);
+        _ = builder.GetChildren(tree.Root).ToArray();
+
+        Assert.Equal(readsAfterFirstLoad + 1, tree.EnumeratedDirectories.Count);
+    }
+
+    [Fact]
+    public void SelectingLoadMoreSentinel_AutoLoadsNextPage()
+    {
+        var tree = new FakeFileTreeService { PageSize = 1 };
+        tree.AdditionalChildren.Add(new FileSystemEntry(
+            "/scope/extra.txt",
+            "extra.txt",
+            FileSystemEntryKind.File,
+            IsReparsePoint: false));
+        using var window = CreateWindow(tree);
+
+        var sentinel = window.TreeBuilder.GetLoadMoreNode(tree.Root);
+        Assert.NotNull(sentinel);
+
+        window.FileTree.SelectedObject = sentinel;
+
+        Assert.Contains(tree.File, window.TreeBuilder.GetChildren(tree.Root));
+        Assert.Contains("Loading more entries", window.Preview.Text);
+        Assert.True(window.Preview.ReadOnly);
+        Assert.False(window.EditShortcut.Enabled);
+        Assert.False(window.DeleteShortcut.Enabled);
+        Assert.False(window.RenameShortcut.Enabled);
+        Assert.False(window.SaveShortcut.Enabled);
+        Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void LoadMoreSentinel_DisappearsWhenDirectoryIsExhausted()
+    {
+        var tree = new FakeFileTreeService { PageSize = 1 };
+        using var window = CreateWindow(tree);
+
+        var sentinel = window.TreeBuilder.GetLoadMoreNode(tree.Root);
+        Assert.NotNull(sentinel);
+
+        window.FileTree.SelectedObject = sentinel;
+
+        Assert.Null(window.TreeBuilder.GetLoadMoreNode(tree.Root));
+        Assert.DoesNotContain(sentinel!, window.TreeBuilder.GetChildren(tree.Root));
+    }
+
+    [Fact]
+    public void TryGetPrefetchParent_ReturnsTrueOnlyWithinThreshold()
+    {
+        var tree = new FakeFileTreeService { PageSize = 10 };
+        for (var i = 0; i < 12; i++)
+        {
+            tree.AdditionalChildren.Add(new FileSystemEntry(
+                $"/scope/extra{i:00}.txt",
+                $"extra{i:00}.txt",
+                FileSystemEntryKind.File,
+                IsReparsePoint: false));
+        }
+        var builder = new FileSystemTreeBuilder(tree);
+        _ = builder.GetChildren(tree.Root).ToArray();
+
+        Assert.False(builder.TryGetPrefetchParent(tree.ChildDirectory, out _));
+        Assert.False(builder.TryGetPrefetchParent(tree.AdditionalChildren[1], out _));
+        Assert.True(builder.TryGetPrefetchParent(tree.AdditionalChildren[2], out var nearEndParent));
+        Assert.Equal(tree.Root, nearEndParent);
+    }
+
+    [Fact]
+    public void TryGetPrefetchParent_ReturnsFalseWhenNoMorePages()
+    {
+        var tree = new FakeFileTreeService { PageSize = 10 };
+        var builder = new FileSystemTreeBuilder(tree);
+        _ = builder.GetChildren(tree.Root).ToArray();
+
+        Assert.False(builder.TryGetPrefetchParent(tree.File, out _));
+        Assert.False(builder.TryGetPrefetchParent(tree.ChildDirectory, out _));
+    }
+
+    [Fact]
+    public void NavigatingNearEndOfPage_PrefetchesNextPageAutomatically()
+    {
+        var tree = new FakeFileTreeService { PageSize = 2 };
+        var extra = new FileSystemEntry(
+            "/scope/extra.txt",
+            "extra.txt",
+            FileSystemEntryKind.File,
+            IsReparsePoint: false);
+        tree.AdditionalChildren.Add(extra);
+        using var window = CreateWindow(tree);
+
+        Assert.DoesNotContain(extra, window.TreeBuilder.GetChildren(tree.Root));
+
+        window.FileTree.SelectedObject = tree.File;
+
+        Assert.Contains(extra, window.TreeBuilder.GetChildren(tree.Root));
+        Assert.Equal(tree.File, window.FileTree.SelectedObject);
+        Assert.NotEqual(FileSystemEntryKind.LoadMore, window.FileTree.SelectedObject?.Kind);
+    }
+
+    [Fact]
+    public void NavigatingEarlyInPage_DoesNotPrefetch()
+    {
+        var tree = new FakeFileTreeService { PageSize = 10 };
+        for (var i = 0; i < 4; i++)
+        {
+            tree.AdditionalChildren.Add(new FileSystemEntry(
+                $"/scope/extra{i:00}.txt",
+                $"extra{i:00}.txt",
+                FileSystemEntryKind.File,
+                IsReparsePoint: false));
+        }
+        using var window = CreateWindow(tree);
+        var readsBefore = tree.EnumeratedDirectories.Count;
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+
+        Assert.Equal(readsBefore, tree.EnumeratedDirectories.Count);
     }
 
     [Fact]
@@ -716,7 +909,11 @@ public sealed class ExplorerWindowTests
 
         public FileSystemEntry File { get; }
 
+        public List<FileSystemEntry> AdditionalChildren { get; } = [];
+
         public List<string> EnumeratedDirectories { get; } = [];
+
+        public int PageSize { get; set; } = int.MaxValue;
 
         public bool CanExpand(FileSystemEntry entry) => entry.IsDirectory;
 
@@ -725,8 +922,18 @@ public sealed class ExplorerWindowTests
             EnumeratedDirectories.Add(directory.FullPath);
 
             return directory == Root
-                ? [ChildDirectory, File]
+                ? [ChildDirectory, File, .. AdditionalChildren]
                 : [];
+        }
+
+        public FileTreePage GetChildrenPage(FileSystemEntry directory, int skip)
+        {
+            var all = GetChildren(directory);
+            var page = all.Skip(skip).ToList();
+
+            return page.Count > PageSize
+                ? new FileTreePage([.. page.Take(PageSize)], HasMore: true)
+                : new FileTreePage(page, HasMore: false);
         }
     }
 

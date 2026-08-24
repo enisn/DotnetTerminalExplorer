@@ -7,4 +7,6 @@ public interface IFileTreeService
     bool CanExpand(FileSystemEntry entry);
 
     IReadOnlyList<FileSystemEntry> GetChildren(FileSystemEntry directory);
+
+    FileTreePage GetChildrenPage(FileSystemEntry directory, int skip);
 }

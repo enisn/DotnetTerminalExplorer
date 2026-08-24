@@ -5,9 +5,9 @@ namespace DotnetTerminalExplorer;
 
 internal static class TerminalExplorerRunner
 {
-    public static void Run(string rootDirectory)
+    public static void Run(string rootDirectory, int pageSize = FileTreeService.DefaultPageSize)
     {
-        var fileTree = new FileTreeService(rootDirectory);
+        var fileTree = new FileTreeService(rootDirectory, pageSize);
         var fileService = new TextFileService();
         var launcher = new DefaultFileLauncher();
         var mutationService = new FileMutationService();

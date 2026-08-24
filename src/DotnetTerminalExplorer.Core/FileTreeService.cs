@@ -2,6 +2,8 @@ namespace DotnetTerminalExplorer.Core;
 
 public sealed class FileTreeService : IFileTreeService
 {
+    public const int DefaultPageSize = 500;
+
     private static readonly StringComparer NameComparer = StringComparer.OrdinalIgnoreCase;
 
     private readonly Func<string, IEnumerable<string>> _enumerateEntries;
@@ -9,19 +11,26 @@ public sealed class FileTreeService : IFileTreeService
     private readonly StringComparison _pathComparison;
     private readonly string _rootPathWithSeparator;
 
-    public FileTreeService(string rootDirectory)
-        : this(rootDirectory, Directory.EnumerateFileSystemEntries, File.GetAttributes)
+    /// <param name="pageSize">
+    /// Number of entries returned per page by <see cref="GetChildrenPage"/>.
+    /// Pass 0 to disable paging entirely.
+    /// </param>
+    public FileTreeService(string rootDirectory, int pageSize = DefaultPageSize)
+        : this(rootDirectory, Directory.EnumerateFileSystemEntries, File.GetAttributes, pageSize)
     {
     }
 
     internal FileTreeService(
         string rootDirectory,
         Func<string, IEnumerable<string>> enumerateEntries,
-        Func<string, FileAttributes> getAttributes)
+        Func<string, FileAttributes> getAttributes,
+        int pageSize = DefaultPageSize)
     {
         ArgumentNullException.ThrowIfNull(enumerateEntries);
         ArgumentNullException.ThrowIfNull(getAttributes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(pageSize, 0);
 
+        PageSize = pageSize == 0 ? int.MaxValue : pageSize;
         RootPath = RootPathResolver.Resolve(rootDirectory);
         _enumerateEntries = enumerateEntries;
         _getAttributes = getAttributes;
@@ -38,6 +47,8 @@ public sealed class FileTreeService : IFileTreeService
     public string RootPath { get; }
 
     public FileSystemEntry Root { get; }
+
+    public int PageSize { get; }
 
     public bool CanExpand(FileSystemEntry entry)
     {
@@ -75,6 +86,52 @@ public sealed class FileTreeService : IFileTreeService
             .ThenBy(static entry => entry.Name, NameComparer)
             .ThenBy(static entry => entry.FullPath, NameComparer)
             .ToArray();
+    }
+
+    public FileTreePage GetChildrenPage(FileSystemEntry directory, int skip)
+    {
+        ArgumentNullException.ThrowIfNull(directory);
+        ArgumentOutOfRangeException.ThrowIfLessThan(skip, 0);
+
+        if (!directory.IsDirectory)
+        {
+            return new FileTreePage([], HasMore: false);
+        }
+
+        if (!IsWithinRoot(directory.FullPath))
+        {
+            throw new InvalidOperationException(
+                $"The path '{directory.FullPath}' is outside the explorer root '{RootPath}'.");
+        }
+
+        if (directory.IsReparsePoint && !IsRoot(directory.FullPath))
+        {
+            return new FileTreePage([], HasMore: false);
+        }
+
+        // The within-page sort keeps each page readable; a global sort would
+        // require enumerating the whole directory up front, which is exactly
+        // what paging exists to avoid.
+        IEnumerable<string> candidates = _enumerateEntries(directory.FullPath)
+            .Where(IsWithinRoot)
+            .Skip(skip);
+
+        if (PageSize < int.MaxValue)
+        {
+            // Fetch one extra entry to detect whether another page follows.
+            candidates = candidates.Take(PageSize + 1);
+        }
+
+        var page = candidates
+            .Select(CreateEntry)
+            .OrderByDescending(static entry => entry.IsDirectory)
+            .ThenBy(static entry => entry.Name, NameComparer)
+            .ThenBy(static entry => entry.FullPath, NameComparer)
+            .ToArray();
+
+        return page.Length > PageSize
+            ? new FileTreePage(page[..PageSize], HasMore: true)
+            : new FileTreePage(page, HasMore: false);
     }
 
     private FileSystemEntry CreateEntry(string path)

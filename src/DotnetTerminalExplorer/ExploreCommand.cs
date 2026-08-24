@@ -6,7 +6,7 @@ using DotnetTerminalExplorer.Core;
 namespace DotnetTerminalExplorer;
 
 [Command(Description = "Explore a directory in the terminal.")]
-internal sealed partial class ExploreCommand(Action<string> runExplorer) : ICommand
+internal sealed partial class ExploreCommand(Action<string, int> runExplorer) : ICommand
 {
     private const int UsageErrorExitCode = 2;
 
@@ -16,8 +16,20 @@ internal sealed partial class ExploreCommand(Action<string> runExplorer) : IComm
         Description = "Directory to explore. Defaults to the current working directory.")]
     public string? Directory { get; set; }
 
+    [CommandOption(
+        "page-size",
+        Description = "Number of entries loaded per page when expanding large directories. Pass 0 to disable paging.")]
+    public int PageSize { get; set; } = FileTreeService.DefaultPageSize;
+
     public ValueTask ExecuteAsync(IConsole console)
     {
+        if (PageSize < 0)
+        {
+            throw new CommandException(
+                "--page-size must be 0 or greater (0 disables paging).",
+                UsageErrorExitCode);
+        }
+
         string rootDirectory;
 
         try
@@ -34,7 +46,7 @@ internal sealed partial class ExploreCommand(Action<string> runExplorer) : IComm
                 innerException: exception);
         }
 
-        runExplorer(rootDirectory);
+        runExplorer(rootDirectory, PageSize);
         return ValueTask.CompletedTask;
     }
 }

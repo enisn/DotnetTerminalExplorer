@@ -6,7 +6,7 @@ namespace DotnetTerminalExplorer;
 internal static class ExplorerCommandLine
 {
     public static CommandLineApplication Create(
-        Action<string> runExplorer,
+        Action<string, int> runExplorer,
         IConsole? console = null)
     {
         ArgumentNullException.ThrowIfNull(runExplorer);

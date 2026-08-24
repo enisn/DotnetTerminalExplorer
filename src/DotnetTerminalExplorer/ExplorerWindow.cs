@@ -53,6 +53,7 @@ internal sealed class ExplorerWindow : Window
     private FileSystemEntry? _creatingInDirectory;
     private int _previewLoadVersion;
     private TextPreviewKind? _previewKind;
+    private bool _advancingLoadMore;
     private readonly HashSet<string> _forcedPreviewPaths = new(StringComparer.Ordinal);
 
     public ExplorerWindow(
@@ -101,6 +102,7 @@ internal sealed class ExplorerWindow : Window
             Width = Dim.Fill(),
             Height = Dim.Fill(StatusBar),
         };
+        TreeBuilder = new FileSystemTreeBuilder(fileTree);
         FileTree = new TreeView<FileSystemEntry>
         {
             X = 0,
@@ -108,8 +110,9 @@ internal sealed class ExplorerWindow : Window
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             MultiSelect = false,
-            TreeBuilder = new FileSystemTreeBuilder(fileTree),
+            TreeBuilder = TreeBuilder,
         };
+        RebindRecursiveExpandToSingleLevel();
         RenameInput = new TextField
         {
             X = 0,
@@ -203,6 +206,8 @@ internal sealed class ExplorerWindow : Window
         FileTree.Expand(fileTree.Root);
     }
 
+    internal FileSystemTreeBuilder TreeBuilder { get; }
+
     internal FrameView FileTreePane { get; }
 
     internal FrameView PreviewPane { get; }
@@ -242,7 +247,7 @@ internal sealed class ExplorerWindow : Window
     public int CalculatedLeftPaneWidth => GetCalculatedLeftPaneWidth();
 
     public bool IsDirty =>
-        _loadedEntry is { IsDirectory: false }
+        _loadedEntry is { Kind: FileSystemEntryKind.File }
         && _previewService is ITextFileService
         && !Preview.ReadOnly
         && Preview.Visible
@@ -361,6 +366,45 @@ internal sealed class ExplorerWindow : Window
         ]);
     }
 
+    private void RebindRecursiveExpandToSingleLevel()
+    {
+        // Recursive expand-all over an arbitrary filesystem subtree is
+        // unbounded; expand one level instead so huge trees stay responsive.
+        var ctrlRight = Key.CursorRight.WithCtrl;
+        var defaults = TreeView<FileSystemEntry>.DefaultKeyBindings;
+
+        if (defaults.TryGetValue(Command.ExpandAll, out var expandAll))
+        {
+            defaults[Command.ExpandAll] = CopyBindingWithout(expandAll, ctrlRight);
+        }
+
+        if (defaults.TryGetValue(Command.Expand, out var expand))
+        {
+            defaults[Command.Expand] = CopyBindingWith(expand, ctrlRight);
+        }
+    }
+
+    private static PlatformKeyBinding CopyBindingWithout(PlatformKeyBinding binding, Key key) =>
+        new()
+        {
+            All = [.. (binding.All ?? []).Where(existing => existing != key)],
+            Windows = [.. (binding.Windows ?? []).Where(existing => existing != key)],
+            Linux = [.. (binding.Linux ?? []).Where(existing => existing != key)],
+            Macos = [.. (binding.Macos ?? []).Where(existing => existing != key)],
+        };
+
+    private static PlatformKeyBinding CopyBindingWith(PlatformKeyBinding binding, Key key) =>
+        new()
+        {
+            All = AddKeyIfMissing(binding.All ?? [], key),
+            Windows = AddKeyIfMissing(binding.Windows ?? [], key),
+            Linux = AddKeyIfMissing(binding.Linux ?? [], key),
+            Macos = AddKeyIfMissing(binding.Macos ?? [], key),
+        };
+
+    private static Key[] AddKeyIfMissing(Key[] keys, Key key) =>
+        keys.Contains(key) ? keys : [.. keys, key];
+
     private void ShowSelection(FileSystemEntry? entry) =>
         ShowSelection(
             entry,
@@ -371,6 +415,20 @@ internal sealed class ExplorerWindow : Window
         _loadedEntry = entry;
         _previewLoadVersion++;
         _previewKind = null;
+
+        if (entry is { Kind: FileSystemEntryKind.LoadMore })
+        {
+            _savedContent = string.Empty;
+            ImagePreview.Visible = false;
+            ImagePreview.Clear();
+            Preview.Visible = true;
+            Preview.ReadOnly = true;
+            ShowPreview("Loading more entries…");
+            UpdatePreviewTitle();
+            UpdateShortcutStates();
+            LoadMoreEntries(entry);
+            return;
+        }
 
         if (entry is null || entry.IsDirectory)
         {
@@ -394,6 +452,51 @@ internal sealed class ExplorerWindow : Window
 
         UpdatePreviewTitle();
         UpdateShortcutStates();
+        PrefetchNextPageIfNearEnd(entry);
+    }
+
+    private void PrefetchNextPageIfNearEnd(FileSystemEntry? entry)
+    {
+        if (entry is null || _advancingLoadMore ||
+            !TreeBuilder.TryGetPrefetchParent(entry, out var directory) ||
+            directory is null)
+        {
+            return;
+        }
+
+        _advancingLoadMore = true;
+        try
+        {
+            if (TreeBuilder.Advance(directory))
+            {
+                FileTree.RefreshObject(directory, startAtTop: false);
+            }
+        }
+        finally
+        {
+            _advancingLoadMore = false;
+        }
+    }
+
+    private void LoadMoreEntries(FileSystemEntry loadMore)
+    {
+        if (_advancingLoadMore)
+        {
+            return;
+        }
+
+        _advancingLoadMore = true;
+        try
+        {
+            if (TreeBuilder.TryAdvance(loadMore, out var parent) && parent is not null)
+            {
+                FileTree.RefreshObject(parent, startAtTop: false);
+            }
+        }
+        finally
+        {
+            _advancingLoadMore = false;
+        }
     }
 
     private void LoadPreview(FileSystemEntry entry, bool forceLoad, int version)
@@ -465,7 +568,7 @@ internal sealed class ExplorerWindow : Window
 
     private void LoadSelected()
     {
-        if (FileTree.SelectedObject is { IsDirectory: false } selectedFile)
+        if (FileTree.SelectedObject is { Kind: FileSystemEntryKind.File } selectedFile)
         {
             _forcedPreviewPaths.Add(selectedFile.FullPath);
             ShowSelection(selectedFile, forceLoad: true);
@@ -479,7 +582,7 @@ internal sealed class ExplorerWindow : Window
 
     public void SaveSelected()
     {
-        if (_loadedEntry is not { IsDirectory: false } selectedFile ||
+        if (_loadedEntry is not { Kind: FileSystemEntryKind.File } selectedFile ||
             _previewService is not ITextFileService fileService)
         {
             return;
@@ -502,6 +605,20 @@ internal sealed class ExplorerWindow : Window
         CancelRename();
 
         var target = FileTree.SelectedObject ?? _fileTreeService.Root;
+
+        if (target.Kind == FileSystemEntryKind.LoadMore)
+        {
+            if (TreeBuilder.TryGetLoadMoreParent(target, out var loadMoreParent) &&
+                loadMoreParent is not null)
+            {
+                target = loadMoreParent;
+            }
+            else
+            {
+                return;
+            }
+        }
+
         if (target.IsDirectory)
         {
             _creatingInDirectory = target;
@@ -535,6 +652,7 @@ internal sealed class ExplorerWindow : Window
             CreateInput.Visible = false;
             _creatingInDirectory = null;
 
+            TreeBuilder.Invalidate(targetDir.FullPath);
             FileTree.RebuildTree();
             FileTree.SelectedObject = newEntry;
             ShowSelection(newEntry);
@@ -561,7 +679,8 @@ internal sealed class ExplorerWindow : Window
         CancelCreate();
 
         var target = FileTree.SelectedObject;
-        if (target is null || target == _fileTreeService.Root)
+        if (target is null || target == _fileTreeService.Root ||
+            target.Kind == FileSystemEntryKind.LoadMore)
         {
             return;
         }
@@ -592,6 +711,7 @@ internal sealed class ExplorerWindow : Window
             RenameInput.Visible = false;
             _renamingEntry = null;
 
+            InvalidateParentCache(updatedEntry.FullPath);
             FileTree.RebuildTree();
             FileTree.SelectedObject = updatedEntry;
             UpdatePreviewTitle();
@@ -617,7 +737,8 @@ internal sealed class ExplorerWindow : Window
     public void DeleteSelected()
     {
         var target = FileTree.SelectedObject;
-        if (target is null || target == _fileTreeService.Root)
+        if (target is null || target == _fileTreeService.Root ||
+            target.Kind == FileSystemEntryKind.LoadMore)
         {
             return;
         }
@@ -645,6 +766,8 @@ internal sealed class ExplorerWindow : Window
                 ShowPreview(TextPreview.ForDirectory().Text);
             }
 
+            InvalidateParentCache(target.FullPath);
+            TreeBuilder.Invalidate(target.FullPath);
             FileTree.RebuildTree();
             FileTree.SelectedObject = _fileTreeService.Root;
             UpdatePreviewTitle();
@@ -655,6 +778,15 @@ internal sealed class ExplorerWindow : Window
         {
             ShowPreview(deleteResult.ErrorMessage ?? $"Unable to delete '{target.Name}'.");
             FileTree.SetFocus();
+        }
+    }
+
+    private void InvalidateParentCache(string entryFullPath)
+    {
+        var parentPath = Path.GetDirectoryName(entryFullPath);
+        if (!string.IsNullOrEmpty(parentPath))
+        {
+            TreeBuilder.Invalidate(parentPath);
         }
     }
 
@@ -692,7 +824,8 @@ internal sealed class ExplorerWindow : Window
             "  Tab               Switch focus between Files tree and Preview pane\n" +
             "  Alt+Left / Alt+[  Shrink the left Files panel\n" +
             "  Alt+Right / Alt+] Expand the left Files panel\n" +
-            "  Up / Down / Enter Navigate directories and select files\n\n" +
+            "  Up / Down / Enter Navigate directories and select files\n" +
+            "  Right / Ctrl+Right Expand the selected directory (one level)\n\n" +
             "File Operations:\n" +
             "  Ctrl+S            Save modifications to the active file\n" +
             "  Ctrl+N            Create a new file in the selected directory\n" +
@@ -742,7 +875,7 @@ internal sealed class ExplorerWindow : Window
 
     private void EditSelected()
     {
-        if (FileTree.SelectedObject is not { IsDirectory: false } selectedFile)
+        if (FileTree.SelectedObject is not { Kind: FileSystemEntryKind.File } selectedFile)
         {
             return;
         }
@@ -759,7 +892,8 @@ internal sealed class ExplorerWindow : Window
 
     private void UpdatePreviewTitle()
     {
-        if (_loadedEntry is null || _loadedEntry.IsDirectory)
+        if (_loadedEntry is null || _loadedEntry.IsDirectory ||
+            _loadedEntry.Kind == FileSystemEntryKind.LoadMore)
         {
             PreviewPane.Title = "Preview";
             return;
@@ -772,10 +906,12 @@ internal sealed class ExplorerWindow : Window
 
     private void UpdateShortcutStates()
     {
-        var isFile = _loadedEntry is { IsDirectory: false };
+        var isFile = _loadedEntry is { Kind: FileSystemEntryKind.File };
         var isEditableText = isFile && _previewService is ITextFileService && !Preview.ReadOnly && Preview.Visible;
         var isTooLargePreview = isFile && _previewKind == TextPreviewKind.TooLarge;
-        var hasNonRootSelection = FileTree.SelectedObject is not null && FileTree.SelectedObject != _fileTreeService.Root;
+        var hasNonRootSelection = FileTree.SelectedObject is { } selection
+            && selection != _fileTreeService.Root
+            && selection.Kind != FileSystemEntryKind.LoadMore;
         EditShortcut.Enabled = isFile;
         SaveShortcut.Enabled = isEditableText;
         LoadShortcut.Enabled = isTooLargePreview;
