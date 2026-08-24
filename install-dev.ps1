@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string] $Configuration = "Release"
+    [string] $Configuration = "Release",
+    [string] $Version
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,9 +11,23 @@ $projectPath = Join-Path $repositoryRoot "src/DotnetTerminalExplorer/DotnetTermi
 $packageDirectory = Join-Path $repositoryRoot "nupkg"
 $packScript = Join-Path $repositoryRoot "pack.ps1"
 
-& $packScript -Configuration $Configuration
+$packArgs = @{
+    Configuration = $Configuration
+}
 
-$version = (dotnet msbuild $projectPath -getProperty:Version).Trim()
+if (-not [string]::IsNullOrWhiteSpace($Version)) {
+    $packArgs["Version"] = $Version
+}
+
+& $packScript @packArgs
+
+$versionArgs = @($projectPath, "-getProperty:Version")
+if (-not [string]::IsNullOrWhiteSpace($Version)) {
+    $normalizedVersion = $Version.TrimStart("v", "V")
+    $versionArgs += "-p:Version=$normalizedVersion"
+}
+
+$version = (dotnet msbuild @versionArgs).Trim()
 $installedTools = dotnet tool list --global
 $isInstalled = $installedTools -match "^dotnetterminalexplorer\s"
 
