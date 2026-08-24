@@ -2,6 +2,7 @@
 
 using System.Drawing;
 using DotnetTerminalExplorer.Core;
+using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -41,6 +42,9 @@ internal sealed class ExplorerWindow : Window
     private string _savedContent = string.Empty;
     private FileSystemEntry? _renamingEntry;
     private FileSystemEntry? _creatingInDirectory;
+    private int _previewLoadVersion;
+    private TextPreviewKind? _previewKind;
+    private readonly HashSet<string> _forcedPreviewPaths = new(StringComparer.Ordinal);
 
     public ExplorerWindow(
         IFileTreeService fileTree,
@@ -197,6 +201,8 @@ internal sealed class ExplorerWindow : Window
 
     internal Shortcut EditShortcut { get; private set; } = null!;
 
+    internal Shortcut LoadShortcut { get; private set; } = null!;
+
     internal Shortcut QuitShortcut { get; private set; } = null!;
 
     public bool IsDirty =>
@@ -238,6 +244,11 @@ internal sealed class ExplorerWindow : Window
             BindKeyToApplication = true,
             Enabled = false,
         };
+        LoadShortcut = new Shortcut(Key.L.WithCtrl, "Load", LoadSelected)
+        {
+            BindKeyToApplication = true,
+            Enabled = false,
+        };
         QuitShortcut = new Shortcut(Key.Esc, "Quit", requestStop)
         {
             BindKeyToApplication = true,
@@ -246,6 +257,7 @@ internal sealed class ExplorerWindow : Window
         return new StatusBar([
             ReloadShortcut,
             SaveShortcut,
+            LoadShortcut,
             NewFileShortcut,
             RenameShortcut,
             DeleteShortcut,
@@ -254,9 +266,16 @@ internal sealed class ExplorerWindow : Window
         ]);
     }
 
-    private void ShowSelection(FileSystemEntry? entry)
+    private void ShowSelection(FileSystemEntry? entry) =>
+        ShowSelection(
+            entry,
+            forceLoad: entry is not null && _forcedPreviewPaths.Contains(entry.FullPath));
+
+    private void ShowSelection(FileSystemEntry? entry, bool forceLoad)
     {
         _loadedEntry = entry;
+        _previewLoadVersion++;
+        _previewKind = null;
 
         if (entry is null || entry.IsDirectory)
         {
@@ -269,27 +288,93 @@ internal sealed class ExplorerWindow : Window
         }
         else
         {
-            var preview = _previewService.Read(entry);
-            if (preview.Kind == TextPreviewKind.Image)
-            {
-                _savedContent = string.Empty;
-                Preview.Visible = false;
-                ImagePreview.Visible = true;
-                ImagePreview.SetImage(entry.FullPath, preview.Text);
-            }
-            else
-            {
-                ImagePreview.Visible = false;
-                ImagePreview.Clear();
-                Preview.Visible = true;
-                _savedContent = preview.Kind == TextPreviewKind.Content ? preview.Text : string.Empty;
-                Preview.ReadOnly = preview.Kind != TextPreviewKind.Content;
-                ShowPreview(preview.Text);
-            }
+            _savedContent = string.Empty;
+            ImagePreview.Visible = false;
+            ImagePreview.Clear();
+            Preview.Visible = true;
+            Preview.ReadOnly = true;
+            ShowPreview($"Loading '{entry.Name}'...");
+            LoadPreview(entry, forceLoad, _previewLoadVersion);
         }
 
         UpdatePreviewTitle();
         UpdateShortcutStates();
+    }
+
+    private void LoadPreview(FileSystemEntry entry, bool forceLoad, int version)
+    {
+        if (!Application.Initialized)
+        {
+            // No main loop is running (unit tests); load synchronously.
+            ApplyPreview(entry, version, ReadPreviewSafely(entry, forceLoad));
+            return;
+        }
+
+        _ = LoadPreviewAsync(entry, forceLoad, version);
+    }
+
+    private async Task LoadPreviewAsync(FileSystemEntry entry, bool forceLoad, int version)
+    {
+        var preview = await Task.Run(() => ReadPreviewSafely(entry, forceLoad));
+        try
+        {
+            Application.Invoke(() => ApplyPreview(entry, version, preview));
+        }
+        catch
+        {
+            // The application was shut down while loading; nothing to update.
+        }
+    }
+
+    private TextPreview ReadPreviewSafely(FileSystemEntry entry, bool forceLoad)
+    {
+        try
+        {
+            return _previewService.Read(entry, forceLoad);
+        }
+        catch (Exception exception)
+        {
+            return TextPreview.FromError($"Unable to preview '{entry.Name}': {exception.Message}");
+        }
+    }
+
+    private void ApplyPreview(FileSystemEntry entry, int version, TextPreview preview)
+    {
+        if (version != _previewLoadVersion || _loadedEntry != entry)
+        {
+            return;
+        }
+
+        _previewKind = preview.Kind;
+
+        if (preview.Kind == TextPreviewKind.Image)
+        {
+            _savedContent = string.Empty;
+            Preview.Visible = false;
+            ImagePreview.Visible = true;
+            ImagePreview.SetImage(entry.FullPath, preview.Text);
+        }
+        else
+        {
+            ImagePreview.Visible = false;
+            ImagePreview.Clear();
+            Preview.Visible = true;
+            _savedContent = preview.Kind == TextPreviewKind.Content ? preview.Text : string.Empty;
+            Preview.ReadOnly = preview.Kind != TextPreviewKind.Content;
+            ShowPreview(preview.Text);
+        }
+
+        UpdatePreviewTitle();
+        UpdateShortcutStates();
+    }
+
+    private void LoadSelected()
+    {
+        if (FileTree.SelectedObject is { IsDirectory: false } selectedFile)
+        {
+            _forcedPreviewPaths.Add(selectedFile.FullPath);
+            ShowSelection(selectedFile, forceLoad: true);
+        }
     }
 
     private void ReloadSelected()
@@ -448,6 +533,8 @@ internal sealed class ExplorerWindow : Window
             if (_loadedEntry is not null &&
                 (_loadedEntry == target || _loadedEntry.FullPath.StartsWith(target.FullPath, StringComparison.Ordinal)))
             {
+                _previewLoadVersion++;
+                _previewKind = null;
                 _loadedEntry = null;
                 _savedContent = string.Empty;
                 ImagePreview.Visible = false;
@@ -504,9 +591,11 @@ internal sealed class ExplorerWindow : Window
     {
         var isFile = _loadedEntry is { IsDirectory: false };
         var isEditableText = isFile && _previewService is ITextFileService && !Preview.ReadOnly && Preview.Visible;
+        var isTooLargePreview = isFile && _previewKind == TextPreviewKind.TooLarge;
         var hasNonRootSelection = FileTree.SelectedObject is not null && FileTree.SelectedObject != _fileTreeService.Root;
         EditShortcut.Enabled = isFile;
         SaveShortcut.Enabled = isEditableText;
+        LoadShortcut.Enabled = isTooLargePreview;
         RenameShortcut.Enabled = hasNonRootSelection;
         DeleteShortcut.Enabled = hasNonRootSelection;
         NewFileShortcut.Enabled = true;

@@ -14,6 +14,9 @@ public sealed record TextPreview(TextPreviewKind Kind, string Text)
     public static TextPreview ForImage(string headerInfo) =>
         new(TextPreviewKind.Image, headerInfo);
 
+    public static TextPreview ForTooLarge(string message) =>
+        new(TextPreviewKind.TooLarge, message);
+
     public static TextPreview FromError(string message) =>
         new(TextPreviewKind.Error, message);
 }

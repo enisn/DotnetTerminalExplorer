@@ -97,6 +97,56 @@ public sealed class TextPreviewServiceTests
         Assert.Contains("PNG", result.Text);
     }
 
+    [Fact]
+    public void Read_SkipsLargeFilesWithTooLargePreview()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.CreateFile("large.txt", new string('x', 100));
+        var readCalls = 0;
+        var service = new TextPreviewService(
+            _ =>
+            {
+                readCalls++;
+                return "content";
+            },
+            maxPreviewBytes: 10);
+
+        var result = service.Read(Entry(path));
+
+        Assert.Equal(TextPreviewKind.TooLarge, result.Kind);
+        Assert.Contains("too large", result.Text);
+        Assert.Contains("large.txt", result.Text);
+        Assert.Contains("Ctrl+L", result.Text);
+        Assert.Equal(0, readCalls);
+    }
+
+    [Fact]
+    public void Read_LoadsLargeFileWhenForced()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = directory.CreateFile("large.txt", new string('x', 100));
+        var service = new TextPreviewService(_ => "forced content", maxPreviewBytes: 10);
+
+        var result = service.Read(Entry(path), forceLoad: true);
+
+        Assert.Equal(TextPreviewKind.Content, result.Kind);
+        Assert.Equal("forced content", result.Text);
+    }
+
+    [Fact]
+    public void Read_LoadsFilesAtTheSizeLimit()
+    {
+        using var directory = new TemporaryDirectory();
+        const string content = "0123456789";
+        var path = directory.CreateFile("boundary.txt", content);
+        var service = new TextPreviewService(File.ReadAllText, maxPreviewBytes: content.Length);
+
+        var result = service.Read(Entry(path));
+
+        Assert.Equal(TextPreviewKind.Content, result.Kind);
+        Assert.Equal(content, result.Text);
+    }
+
     private static FileSystemEntry Entry(string path) =>
         new(
             path,

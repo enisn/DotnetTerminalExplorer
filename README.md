@@ -79,6 +79,7 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | --- | --- |
 | `F5` | Reload the selected file |
 | `Ctrl+S` | Save changes to the active file |
+| `Ctrl+L` | Load a large file that was skipped automatically |
 | `Ctrl+N` | Create a new file in the selected directory |
 | `F2` | Rename the selected file or directory inline |
 | `Del` | Delete the selected file or directory |
@@ -86,6 +87,8 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `Esc` | Quit (or cancel inline input) |
 
 `F8` and `Ctrl+S` are disabled for directories. Files can be edited directly in the right-hand editor pane and saved with `Ctrl+S`. Press `Ctrl+N` to create a new file in the current directory or `F2` to trigger an inline rename bar in the tree pane (`Enter` commits, `Esc` cancels). Press `Del` to delete the selected file or directory.
+
+File previews load asynchronously so navigating the tree never blocks. Files larger than 2 MB are not read automatically; the preview shows file metadata instead and `Ctrl+L` loads them on demand.
 
 ## Initial behavior
 

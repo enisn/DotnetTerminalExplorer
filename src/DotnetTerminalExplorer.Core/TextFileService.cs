@@ -4,6 +4,7 @@ public sealed class TextFileService : ITextFileService
 {
     private readonly Func<string, string> _readAllText;
     private readonly Action<string, string> _writeAllText;
+    private readonly long _maxPreviewBytes;
 
     public TextFileService()
         : this(File.ReadAllText, File.WriteAllText)
@@ -12,17 +13,19 @@ public sealed class TextFileService : ITextFileService
 
     internal TextFileService(
         Func<string, string> readAllText,
-        Action<string, string> writeAllText)
+        Action<string, string> writeAllText,
+        long maxPreviewBytes = FilePreviewHelper.DefaultMaxPreviewBytes)
     {
         ArgumentNullException.ThrowIfNull(readAllText);
         ArgumentNullException.ThrowIfNull(writeAllText);
 
         _readAllText = readAllText;
         _writeAllText = writeAllText;
+        _maxPreviewBytes = maxPreviewBytes;
     }
 
-    public TextPreview Read(FileSystemEntry entry) =>
-        FilePreviewHelper.ReadPreview(entry, _readAllText);
+    public TextPreview Read(FileSystemEntry entry, bool forceLoad = false) =>
+        FilePreviewHelper.ReadPreview(entry, _readAllText, forceLoad, _maxPreviewBytes);
 
     public FileSaveResult Save(FileSystemEntry entry, string content)
     {

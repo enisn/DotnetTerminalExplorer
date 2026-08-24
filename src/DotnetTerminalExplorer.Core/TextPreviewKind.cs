@@ -7,4 +7,5 @@ public enum TextPreviewKind
     Error,
     Binary,
     Image,
+    TooLarge,
 }

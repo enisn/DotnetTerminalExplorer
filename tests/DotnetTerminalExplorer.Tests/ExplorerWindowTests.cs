@@ -25,6 +25,96 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
+    public void SelectingTooLargeFile_ShowsPlaceholderAndEnablesLoadShortcut()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.ForTooLarge("File is too large to load automatically.");
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.File;
+
+        Assert.True(window.Preview.Visible);
+        Assert.True(window.Preview.ReadOnly);
+        Assert.Contains("too large", window.Preview.Text);
+        Assert.True(window.LoadShortcut.Enabled);
+        Assert.False(window.SaveShortcut.Enabled);
+        Assert.True(window.EditShortcut.Enabled);
+        Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void LoadShortcut_ForceLoadsTooLargeFileAndEnablesEditing()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.ForTooLarge("File is too large to load automatically.");
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = tree.File;
+
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.FromContent("forced content");
+        window.LoadShortcut.Action!.Invoke();
+
+        Assert.Equal("forced content", window.Preview.Text);
+        Assert.False(window.Preview.ReadOnly);
+        Assert.False(window.LoadShortcut.Enabled);
+        Assert.True(window.SaveShortcut.Enabled);
+        Assert.Equal([tree.File.FullPath], preview.ForcedReadPaths);
+        Assert.False(window.IsDirty);
+    }
+
+    [Fact]
+    public void ReloadShortcut_ReloadsForcedFilesWithoutAskingAgain()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.ForTooLarge("File is too large to load automatically.");
+        using var window = CreateWindow(tree, preview);
+        window.FileTree.SelectedObject = tree.File;
+
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.FromContent("forced content");
+        window.LoadShortcut.Action!.Invoke();
+        preview.PreviewByPath[tree.File.FullPath] = TextPreview.FromContent("reloaded content");
+        window.ReloadShortcut.Action!.Invoke();
+
+        Assert.Equal("reloaded content", window.Preview.Text);
+        Assert.Equal(2, preview.ForcedReadPaths.Count(path => path == tree.File.FullPath));
+    }
+
+    [Fact]
+    public void LoadShortcut_DoesNothingForDirectoriesAndUnselectedEntries()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        using var window = CreateWindow(tree, preview);
+
+        window.FileTree.SelectedObject = tree.ChildDirectory;
+        window.LoadShortcut.Action!.Invoke();
+
+        Assert.Empty(preview.ForcedReadPaths);
+        Assert.Contains("Select a file", window.Preview.Text);
+    }
+
+    [Fact]
+    public void SelectingFile_ShowsLoadingPlaceholderBeforeContentArrives()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        using var window = CreateWindow(tree, preview);
+        string? textDuringRead = null;
+        var readOnlyDuringRead = true;
+        preview.OnRead = () => (textDuringRead, readOnlyDuringRead) = (window.Preview.Text, window.Preview.ReadOnly);
+
+        window.FileTree.SelectedObject = tree.File;
+
+        Assert.Contains("Loading", textDuringRead);
+        Assert.True(readOnlyDuringRead);
+        Assert.Equal("preview", window.Preview.Text);
+        Assert.False(window.Preview.ReadOnly);
+        Assert.False(window.LoadShortcut.Enabled);
+    }
+
+    [Fact]
     public void SelectingFile_UpdatesPreviewAndEditEnablement()
     {
         var tree = new FakeFileTreeService();
@@ -373,6 +463,9 @@ public sealed class ExplorerWindowTests
         Assert.Equal(Key.S.WithCtrl, window.SaveShortcut.Key);
         Assert.Equal("Save", window.SaveShortcut.Title);
 
+        Assert.Equal(Key.L.WithCtrl, window.LoadShortcut.Key);
+        Assert.Equal("Load", window.LoadShortcut.Title);
+
         Assert.Equal(Key.N.WithCtrl, window.NewFileShortcut.Key);
         Assert.Equal("New", window.NewFileShortcut.Title);
 
@@ -511,11 +604,20 @@ public sealed class ExplorerWindowTests
 
         public List<string> ReadPaths { get; } = [];
 
+        public List<string> ForcedReadPaths { get; } = [];
+
+        public Action? OnRead { get; set; }
+
         public string? SaveError { get; init; }
 
-        public TextPreview Read(FileSystemEntry entry)
+        public TextPreview Read(FileSystemEntry entry, bool forceLoad = false)
         {
+            OnRead?.Invoke();
             ReadPaths.Add(entry.FullPath);
+            if (forceLoad)
+            {
+                ForcedReadPaths.Add(entry.FullPath);
+            }
 
             if (PreviewByPath.TryGetValue(entry.FullPath, out var customPreview))
             {
