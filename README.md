@@ -10,8 +10,9 @@ Dotnet Terminal Explorer (`dte`) is a deliberately lightweight, scoped file expl
 
 ## Requirements
 
-- .NET 10 SDK to build the repository.
-- .NET 10 runtime to run the framework-dependent tool.
+- **Standalone Native Binary (Recommended):** **None** — zero dependencies or .NET runtime installation required (pre-compiled with Native AOT).
+- **.NET Global Tool (`dotnet tool`):** Requires [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) or SDK.
+- **Building from Source:** Requires [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
 
 ## Installation
 
