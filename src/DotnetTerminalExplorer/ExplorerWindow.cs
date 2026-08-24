@@ -37,6 +37,7 @@ internal sealed class ExplorerWindow : Window
     private readonly IDefaultFileLauncher _launcher;
     private readonly ITextPreviewService _previewService;
     private readonly IFileMutationService _mutationService;
+    private readonly Func<FileSystemEntry, bool> _confirmDelete;
 
     private FileSystemEntry? _loadedEntry;
     private string _savedContent = string.Empty;
@@ -51,7 +52,8 @@ internal sealed class ExplorerWindow : Window
         ITextPreviewService previewService,
         IDefaultFileLauncher launcher,
         Action requestStop,
-        IFileMutationService? mutationService = null)
+        IFileMutationService? mutationService = null,
+        Func<FileSystemEntry, bool>? confirmDelete = null)
     {
         ArgumentNullException.ThrowIfNull(fileTree);
         ArgumentNullException.ThrowIfNull(previewService);
@@ -62,6 +64,7 @@ internal sealed class ExplorerWindow : Window
         _previewService = previewService;
         _launcher = launcher;
         _mutationService = mutationService ?? new FileMutationService();
+        _confirmDelete = confirmDelete ?? ConfirmDeleteViaMessageBox;
 
         Title = ProductInfo.Name;
         X = 0;
@@ -539,6 +542,12 @@ internal sealed class ExplorerWindow : Window
             return;
         }
 
+        if (!_confirmDelete(target))
+        {
+            FileTree.SetFocus();
+            return;
+        }
+
         var deleteResult = _mutationService.Delete(target);
         if (deleteResult.Success)
         {
@@ -567,6 +576,26 @@ internal sealed class ExplorerWindow : Window
             ShowPreview(deleteResult.ErrorMessage ?? $"Unable to delete '{target.Name}'.");
             FileTree.SetFocus();
         }
+    }
+
+    private static bool ConfirmDeleteViaMessageBox(FileSystemEntry entry)
+    {
+        if (!Application.Initialized || Application.Instance is null)
+        {
+            // No main loop is running (unit tests); proceed without a modal.
+            return true;
+        }
+
+        var message = entry.IsDirectory
+            ? $"Delete directory '{entry.Name}' and all of its contents?"
+            : $"Delete '{entry.Name}'?";
+        var choice = MessageBox.Query(
+            Application.Instance,
+            "Delete",
+            message,
+            "Delete",
+            "Cancel");
+        return choice == 0;
     }
 
     private void EditSelected()

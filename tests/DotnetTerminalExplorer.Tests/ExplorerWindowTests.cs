@@ -345,6 +345,69 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
+    public void DeleteShortcut_AsksForConfirmationBeforeDeleting()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        var confirmedEntries = new List<FileSystemEntry>();
+        using var window = CreateWindow(
+            tree,
+            mutationService: mutation,
+            confirmDelete: entry =>
+            {
+                confirmedEntries.Add(entry);
+                return true;
+            });
+
+        window.FileTree.SelectedObject = tree.File;
+        window.DeleteSelected();
+
+        Assert.Equal([tree.File], confirmedEntries);
+        Assert.Equal([tree.File.FullPath], mutation.DeletedEntries.Select(e => e.FullPath));
+    }
+
+    [Fact]
+    public void DeleteShortcut_DoesNotDeleteWhenConfirmationIsDeclined()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(
+            tree,
+            mutationService: mutation,
+            confirmDelete: _ => false);
+
+        window.FileTree.SelectedObject = tree.File;
+
+        window.DeleteSelected();
+
+        Assert.Empty(mutation.DeletedEntries);
+        Assert.Equal(tree.File, window.LoadedEntry);
+        Assert.Equal(tree.File, window.FileTree.SelectedObject);
+    }
+
+    [Fact]
+    public void DeleteShortcut_DoesNotAskForConfirmationWhenRootIsSelected()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        var confirmationCount = 0;
+        using var window = CreateWindow(
+            tree,
+            mutationService: mutation,
+            confirmDelete: _ =>
+            {
+                confirmationCount++;
+                return true;
+            });
+
+        window.FileTree.SelectedObject = tree.Root;
+        window.DeleteSelected();
+
+        Assert.Equal(0, confirmationCount);
+        Assert.Empty(mutation.DeletedEntries);
+    }
+
+    [Fact]
     public void DeleteShortcut_DisplaysErrorWhenDeleteFails()
     {
         var tree = new FakeFileTreeService();
@@ -545,13 +608,15 @@ public sealed class ExplorerWindowTests
         FakeFileService? preview = null,
         FakeLauncher? launcher = null,
         Action? requestStop = null,
-        FakeMutationService? mutationService = null) =>
+        FakeMutationService? mutationService = null,
+        Func<FileSystemEntry, bool>? confirmDelete = null) =>
         new(
             tree,
             preview ?? new FakeFileService(),
             launcher ?? new FakeLauncher(),
             requestStop ?? (() => { }),
-            mutationService ?? new FakeMutationService());
+            mutationService ?? new FakeMutationService(),
+            confirmDelete);
 
     private sealed class FakeFileTreeService : IFileTreeService
     {
