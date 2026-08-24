@@ -61,7 +61,9 @@ jobs:
           else
             TAG="${{ github.ref_name }}"
           fi
+          SEMVER="${TAG#v}"
           echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "SEMVER=$SEMVER" >> "$GITHUB_OUTPUT"
 
       - name: Publish Native AOT
         shell: bash
@@ -69,6 +71,7 @@ jobs:
           dotnet publish src/DotnetTerminalExplorer \
             -c Release \
             -r ${{ matrix.rid }} \
+            -p:Version="${{ steps.version.outputs.SEMVER }}" \
             -p:PublishAot=true \
             -p:StripSymbols=true \
             -o ./dist

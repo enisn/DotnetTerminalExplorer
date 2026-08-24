@@ -43,12 +43,13 @@ jobs:
           --output nupkg
 
       - name: Install packed tool in isolation
-        run: >-
-          dotnet tool install DotnetTerminalExplorer
-          --tool-path artifacts/tool
-          --add-source nupkg
-          --version 0.1.0
-          --ignore-failed-sources
+        run: |
+          VERSION=$(dotnet msbuild src/DotnetTerminalExplorer/DotnetTerminalExplorer.csproj -getProperty:Version | tr -d '\r\n')
+          dotnet tool install DotnetTerminalExplorer \
+            --tool-path artifacts/tool \
+            --add-source nupkg \
+            --version "$VERSION" \
+            --ignore-failed-sources
 
       - name: Verify tool metadata paths
         run: |

@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

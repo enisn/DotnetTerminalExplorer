@@ -12,8 +12,7 @@ $packScript = Join-Path $repositoryRoot "pack.ps1"
 
 & $packScript -Configuration $Configuration
 
-[xml] $project = Get-Content $projectPath
-$version = [string] $project.Project.PropertyGroup.Version
+$version = (dotnet msbuild $projectPath -getProperty:Version).Trim()
 $installedTools = dotnet tool list --global
 $isInstalled = $installedTools -match "^dotnetterminalexplorer\s"
 

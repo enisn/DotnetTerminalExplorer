@@ -3,7 +3,6 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>DotnetTerminalExplorer</AssemblyName>
     <RootNamespace>DotnetTerminalExplorer</RootNamespace>
-    <Version>0.1.0</Version>
 
     <IsPackable>true</IsPackable>
     <PackAsTool>true</PackAsTool>
