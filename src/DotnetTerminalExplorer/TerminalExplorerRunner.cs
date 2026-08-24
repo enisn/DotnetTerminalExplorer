@@ -1,5 +1,6 @@
 using DotnetTerminalExplorer.Core;
 using Terminal.Gui.App;
+using Terminal.Gui.Drivers;
 
 namespace DotnetTerminalExplorer;
 
@@ -11,6 +12,8 @@ internal static class TerminalExplorerRunner
         var fileService = new TextFileService();
         var launcher = new DefaultFileLauncher();
         var mutationService = new FileMutationService();
+
+        Driver.SizeDetection = SizeDetectionMode.Polling;
 
         using var application = Application.Create().Init();
         using var window = new ExplorerWindow(
