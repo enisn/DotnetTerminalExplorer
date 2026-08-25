@@ -39,9 +39,11 @@ internal sealed class SearchDialog : Dialog
     public CheckBox GitIgnoreCheck { get; }
     public Label StatusLabel { get; }
     public ListView ResultsListView { get; }
+    public Button ShowInTreeButton { get; }
 
     public SearchResult? SelectedResult { get; private set; }
     public event Action<SearchResult>? ResultChosen;
+    public event Action<IReadOnlyList<SearchResult>>? ShowInTreeRequested;
 
     public SearchDialog(
         ISearchService searchService,
@@ -137,6 +139,20 @@ internal sealed class SearchDialog : Dialog
             e.Handled = true;
         };
 
+        ShowInTreeButton = new Button
+        {
+            Text = "Show in Tree",
+            X = 1,
+            Y = Pos.AnchorEnd(1),
+            Enabled = false,
+        };
+
+        ShowInTreeButton.Accepting += (s, e) =>
+        {
+            RequestShowInTree();
+            e.Handled = true;
+        };
+
         Add(
             queryLabel,
             QueryInput,
@@ -146,6 +162,7 @@ internal sealed class SearchDialog : Dialog
             GitIgnoreCheck,
             StatusLabel,
             ResultsListView,
+            ShowInTreeButton,
             closeButton);
 
         ContentModeCheck.ValueChanged += (_, args) =>
@@ -224,6 +241,17 @@ internal sealed class SearchDialog : Dialog
         }
     }
 
+    public void RequestShowInTree()
+    {
+        if (_results.Count == 0)
+        {
+            return;
+        }
+
+        ShowInTreeRequested?.Invoke(_results.ToArray());
+        RequestStop();
+    }
+
     public void TriggerSearch()
     {
         var generation = Interlocked.Increment(ref _searchGeneration);
@@ -241,6 +269,7 @@ internal sealed class SearchDialog : Dialog
 
         _results.Clear();
         _displayList.Clear();
+        ShowInTreeButton.Enabled = false;
 
         var query = QueryInput.Text.Trim();
 
@@ -436,6 +465,7 @@ internal sealed class SearchDialog : Dialog
             StatusLabel.Text = _results.Count == 0
                 ? $"No matches found ({stopwatch.ElapsedMilliseconds} ms)"
                 : $"Found {_results.Count} matches in {stopwatch.ElapsedMilliseconds} ms";
+            ShowInTreeButton.Enabled = _results.Count > 0;
         }
 
         MarshalToUi(CompleteAction);

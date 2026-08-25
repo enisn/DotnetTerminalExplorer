@@ -100,9 +100,12 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `F2` | Rename the selected file or directory inline |
 | `Del` | Delete the selected file or directory (asks for confirmation) |
 | `F8` | Open the selected file with the operating system's default application |
+| `Alt+X` | Clear an applied search filter from the file tree |
 | `Esc` | Return to file tree (if editor focused) / Quit with confirmation (if tree focused) |
 
 `Ctrl+F` / `F3` is context-aware: pressing it while focused on the editor opens an in-editor find bar with instant match navigation (`Enter`/`F3` for next, `Shift+Enter`/`Shift+F3` for previous, `Alt+C` for case sensitivity); pressing it while focused on the file tree (or pressing `Ctrl+Shift+F` anytime) opens a ripgrep-grade workspace search modal streaming matches asynchronously across the repository with GitIgnore filtering, regex support, and file/content mode toggles.
+
+When a workspace search finishes, the `Show in Tree` button becomes enabled and applies the found files as a filter on the file tree: only matched files and their parent directories are shown (the pane title changes to `Files (filtered)`), so matches can be previewed sequentially with the arrow keys. Clear the filter with `Alt+X` or by pressing `Esc` while the tree is focused; `Esc` only quits once no filter is applied.
 
 While the in-editor find bar is open, press `Ctrl+H` or `Alt+R` (or click the `Replace` button on the right of the find bar) to reveal the replace field (`Tab` / `Shift+Tab` switches between the Find and Replace inputs). `Enter` in the replace field replaces the current match and advances to the next one, `Ctrl+Enter` replaces all occurrences at once, and `Alt+C` toggles case sensitivity for both find and replace. Replace actions show a read-only hint for non-editable previews; save the file with `Ctrl+S` afterwards.
 

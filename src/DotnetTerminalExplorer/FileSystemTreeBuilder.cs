@@ -14,12 +14,73 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
     private readonly Dictionary<string, DirectoryState> _states = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FileSystemEntry> _loadMoreByParent = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FileSystemEntry> _parentByChild = new(StringComparer.Ordinal);
+    private HashSet<string>? _filterVisiblePaths;
+    private Dictionary<string, FileSystemEntry>? _filterFiles;
 
     private sealed class DirectoryState
     {
         public List<FileSystemEntry> Loaded { get; } = [];
 
         public bool HasMore { get; set; }
+    }
+
+    public bool IsFilterActive
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _filterVisiblePaths is not null;
+            }
+        }
+    }
+
+    public void ApplyFilter(IEnumerable<FileSystemEntry> matchedFiles)
+    {
+        ArgumentNullException.ThrowIfNull(matchedFiles);
+
+        var comparison = PathComparison;
+        var rootPath = fileTree.Root.FullPath;
+        var visible = new HashSet<string>(StringComparer.FromComparison(comparison));
+        var files = new Dictionary<string, FileSystemEntry>(StringComparer.FromComparison(comparison));
+
+        foreach (var file in matchedFiles)
+        {
+            if (file.Kind != FileSystemEntryKind.File)
+            {
+                continue;
+            }
+
+            files[file.FullPath] = file;
+            visible.Add(file.FullPath);
+
+            var directory = Path.GetDirectoryName(file.FullPath);
+            while (!string.IsNullOrEmpty(directory) && !visible.Contains(directory))
+            {
+                if (string.Equals(directory, rootPath, comparison))
+                {
+                    break;
+                }
+
+                visible.Add(directory);
+                directory = Path.GetDirectoryName(directory);
+            }
+        }
+
+        lock (_gate)
+        {
+            _filterVisiblePaths = visible;
+            _filterFiles = files;
+        }
+    }
+
+    public void ClearFilter()
+    {
+        lock (_gate)
+        {
+            _filterVisiblePaths = null;
+            _filterFiles = null;
+        }
     }
 
     public override bool CanExpand(FileSystemEntry toExpand) =>
@@ -34,12 +95,56 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
 
         lock (_gate)
         {
+            if (_filterVisiblePaths is { } visiblePaths)
+            {
+                return GetFilteredChildren(forObject, visiblePaths);
+            }
+
             var state = EnsureState(forObject);
             return state.HasMore
                 ? [.. state.Loaded, GetOrCreateLoadMoreNode(forObject)]
                 : [.. state.Loaded];
         }
     }
+
+    private List<FileSystemEntry> GetFilteredChildren(
+        FileSystemEntry directory,
+        HashSet<string> visiblePaths)
+    {
+        var prefix = directory.FullPath.EndsWith(Path.DirectorySeparatorChar)
+            ? directory.FullPath
+            : directory.FullPath + Path.DirectorySeparatorChar;
+        var children = new List<FileSystemEntry>();
+
+        foreach (var path in visiblePaths)
+        {
+            if (!path.StartsWith(prefix, PathComparison))
+            {
+                continue;
+            }
+
+            var name = path[prefix.Length..];
+            if (name.Length == 0 ||
+                name.Contains(Path.DirectorySeparatorChar) ||
+                name.Contains(Path.AltDirectorySeparatorChar))
+            {
+                continue;
+            }
+
+            children.Add(_filterFiles!.TryGetValue(path, out var file)
+                ? file
+                : new FileSystemEntry(path, name, FileSystemEntryKind.Directory, IsReparsePoint: false));
+        }
+
+        children.Sort(static (left, right) => left.IsDirectory == right.IsDirectory
+            ? string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
+            : (left.IsDirectory ? -1 : 1));
+        return children;
+    }
+
+    private static StringComparison PathComparison => OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
 
     public bool TryGetLoadMoreParent(FileSystemEntry loadMore, out FileSystemEntry? parent)
     {

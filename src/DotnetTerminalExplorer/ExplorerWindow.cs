@@ -307,7 +307,14 @@ internal sealed class ExplorerWindow : Window
             }
             else if (keyEvent == Key.Esc)
             {
-                RequestExit();
+                if (IsTreeFiltered)
+                {
+                    ClearTreeFilter();
+                }
+                else
+                {
+                    RequestExit();
+                }
                 keyEvent.Handled = true;
             }
         };
@@ -356,6 +363,8 @@ internal sealed class ExplorerWindow : Window
     internal Shortcut HelpShortcut { get; private set; } = null!;
 
     internal Shortcut SearchShortcut { get; private set; } = null!;
+
+    internal Shortcut ClearFilterShortcut { get; private set; } = null!;
 
     internal Shortcut ReloadShortcut { get; private set; } = null!;
 
@@ -450,6 +459,11 @@ internal sealed class ExplorerWindow : Window
         {
             BindKeyToApplication = true,
         };
+        ClearFilterShortcut = new Shortcut(Key.X.WithAlt, "Clear Filter", ClearTreeFilter)
+        {
+            BindKeyToApplication = true,
+            Enabled = false,
+        };
         ReloadShortcut = new Shortcut(Key.F5, "Reload", ReloadSelected)
         {
             BindKeyToApplication = true,
@@ -491,6 +505,7 @@ internal sealed class ExplorerWindow : Window
         return new StatusBar([
             HelpShortcut,
             SearchShortcut,
+            ClearFilterShortcut,
             SaveShortcut,
             NewFileShortcut,
             QuitShortcut
@@ -1001,6 +1016,8 @@ internal sealed class ExplorerWindow : Window
             "Search & Replace:\n" +
             "  Ctrl+F / F3       Find in active file (if editor focused) or Workspace Search (if tree focused)\n" +
             "  Ctrl+Shift+F      Workspace Search across all files (Ripgrep speed)\n" +
+            "  Show in Tree      Apply completed search results as a filter on the file tree\n" +
+            "  Alt+X / Esc       Clear an applied tree filter (Esc quits only when no filter is applied)\n" +
             "  F3 / Enter        Next match in find bar\n" +
             "  Shift+F3 / S-Ent  Previous match in find bar\n" +
             "  Ctrl+H            Find & replace in active file (if editor focused)\n" +
@@ -1091,8 +1108,52 @@ internal sealed class ExplorerWindow : Window
 
         var dialog = new SearchDialog(_searchService, _fileTreeService.Root.FullPath, _application);
         dialog.ResultChosen += NavigateToSearchResult;
+        dialog.ShowInTreeRequested += ShowSearchResultsInTree;
 
         _application.Run(dialog);
+    }
+
+    public bool IsTreeFiltered { get; private set; }
+
+    public void ShowSearchResultsInTree(IReadOnlyList<SearchResult> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+
+        var matchedFiles = results
+            .Select(static result => result.Entry)
+            .Where(static entry => entry.Kind == FileSystemEntryKind.File)
+            .ToArray();
+
+        if (matchedFiles.Length == 0)
+        {
+            return;
+        }
+
+        TreeBuilder.ApplyFilter(matchedFiles);
+        IsTreeFiltered = true;
+        FileTreePane.Title = "Files (filtered)";
+        ClearFilterShortcut.Enabled = true;
+        FileTree.RebuildTree();
+        FileTree.Expand(_fileTreeService.Root);
+        FileTree.GoToFirst();
+        FileTree.SetFocus();
+    }
+
+    public void ClearTreeFilter()
+    {
+        if (!IsTreeFiltered)
+        {
+            return;
+        }
+
+        TreeBuilder.ClearFilter();
+        IsTreeFiltered = false;
+        FileTreePane.Title = "Files";
+        ClearFilterShortcut.Enabled = false;
+        FileTree.RebuildTree();
+        FileTree.Expand(_fileTreeService.Root);
+        FileTree.GoToFirst();
+        FileTree.SetFocus();
     }
 
     public void NavigateToSearchResult(SearchResult result)

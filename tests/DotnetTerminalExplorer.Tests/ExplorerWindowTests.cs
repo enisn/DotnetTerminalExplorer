@@ -1017,6 +1017,145 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
+    public void ShowSearchResultsInTree_FiltersTreeToMatchedFilesAndAncestors()
+    {
+        var tree = new FakeFileTreeService();
+        var unmatchedFile = new FileSystemEntry("/scope/other.txt", "other.txt", FileSystemEntryKind.File, false);
+        var nestedDir = new FileSystemEntry("/scope/child", "child", FileSystemEntryKind.Directory, false);
+        var nestedFile = new FileSystemEntry("/scope/child/deep.txt", "deep.txt", FileSystemEntryKind.File, false);
+        using var window = CreateWindow(tree);
+
+        window.ShowSearchResultsInTree(
+        [
+            new SearchResult(nestedFile, 0, 0, nestedFile.FullPath, 0),
+            new SearchResult(unmatchedFile, 0, 0, unmatchedFile.FullPath, 0),
+        ]);
+
+        Assert.True(window.IsTreeFiltered);
+        Assert.True(window.TreeBuilder.IsFilterActive);
+        Assert.Equal("Files (filtered)", window.FileTreePane.Title);
+        Assert.True(window.ClearFilterShortcut.Enabled);
+
+        var rootChildren = window.TreeBuilder.GetChildren(tree.Root).ToArray();
+        Assert.Equal([nestedDir, unmatchedFile], rootChildren);
+
+        var nestedChildren = window.TreeBuilder.GetChildren(nestedDir).ToArray();
+        Assert.Equal([nestedFile], nestedChildren);
+    }
+
+    [Fact]
+    public void ShowSearchResultsInTree_DeduplicatesResultsForTheSameFile()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        window.ShowSearchResultsInTree(
+        [
+            new SearchResult(tree.File, 10, 0, "match", 5),
+            new SearchResult(tree.File, 25, 0, "match", 5),
+        ]);
+
+        var rootChildren = window.TreeBuilder.GetChildren(tree.Root).ToArray();
+        Assert.Equal([tree.File], rootChildren);
+    }
+
+    [Fact]
+    public void ShowSearchResultsInTree_DoesNotEnumerateFileSystem()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+        var enumeratedBefore = tree.EnumeratedDirectories.Count;
+
+        window.ShowSearchResultsInTree([new SearchResult(tree.File, 0, 0, tree.File.FullPath, 0)]);
+
+        Assert.Equal(enumeratedBefore, tree.EnumeratedDirectories.Count);
+    }
+
+    [Fact]
+    public void ShowSearchResultsInTree_WithoutFileResults_DoesNotApplyFilter()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+        var childrenBefore = window.TreeBuilder.GetChildren(tree.Root).ToArray();
+
+        window.ShowSearchResultsInTree([]);
+
+        Assert.False(window.IsTreeFiltered);
+        Assert.Equal("Files", window.FileTreePane.Title);
+        Assert.Equal(childrenBefore, window.TreeBuilder.GetChildren(tree.Root).ToArray());
+    }
+
+    [Fact]
+    public void ClearTreeFilter_RestoresUnfilteredTree()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        window.ShowSearchResultsInTree([new SearchResult(tree.File, 0, 0, tree.File.FullPath, 0)]);
+        window.ClearTreeFilter();
+
+        Assert.False(window.IsTreeFiltered);
+        Assert.False(window.TreeBuilder.IsFilterActive);
+        Assert.Equal("Files", window.FileTreePane.Title);
+        Assert.False(window.ClearFilterShortcut.Enabled);
+
+        var rootChildren = window.TreeBuilder.GetChildren(tree.Root).ToArray();
+        Assert.Equal([tree.ChildDirectory, tree.File, .. tree.AdditionalChildren], rootChildren);
+    }
+
+    [Fact]
+    public void ClearTreeFilter_WithoutAppliedFilter_DoesNothing()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        window.ClearTreeFilter();
+
+        Assert.False(window.IsTreeFiltered);
+        Assert.Equal("Files", window.FileTreePane.Title);
+    }
+
+    [Fact]
+    public void EscOnTree_WhenFilterApplied_ClearsFilterBeforeQuitting()
+    {
+        var quitInvocations = 0;
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(
+            tree,
+            requestStop: () => quitInvocations++,
+            confirmExit: () => true);
+
+        window.ShowSearchResultsInTree([new SearchResult(tree.File, 0, 0, tree.File.FullPath, 0)]);
+        window.FileTree.NewKeyDownEvent(Key.Esc);
+
+        Assert.Equal(0, quitInvocations);
+        Assert.False(window.IsTreeFiltered);
+
+        window.FileTree.NewKeyDownEvent(Key.Esc);
+
+        Assert.Equal(1, quitInvocations);
+    }
+
+    [Fact]
+    public void ClearFilterShortcut_IsAltXDisabledByDefaultAndClearsFilter()
+    {
+        var tree = new FakeFileTreeService();
+        using var window = CreateWindow(tree);
+
+        Assert.Equal(Key.X.WithAlt, window.ClearFilterShortcut.Key);
+        Assert.Equal("Clear Filter", window.ClearFilterShortcut.Title);
+        Assert.True(window.ClearFilterShortcut.BindKeyToApplication);
+        Assert.False(window.ClearFilterShortcut.Enabled);
+
+        window.ShowSearchResultsInTree([new SearchResult(tree.File, 0, 0, tree.File.FullPath, 0)]);
+
+        window.ClearFilterShortcut.Action!.Invoke();
+
+        Assert.False(window.IsTreeFiltered);
+        Assert.False(window.ClearFilterShortcut.Enabled);
+    }
+
+    [Fact]
     public void NavigateToSearchResult_SelectsFileAndLoadsPreview()
     {
         var tree = new FakeFileTreeService();

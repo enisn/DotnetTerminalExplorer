@@ -54,6 +54,92 @@ public sealed class SearchDialogTests
         Assert.NotNull(dialog.RegexCheck);
         Assert.NotNull(dialog.GitIgnoreCheck);
         Assert.NotNull(dialog.ResultsListView);
+        Assert.NotNull(dialog.ShowInTreeButton);
+    }
+
+    [Fact]
+    public void ShowInTreeButton_DisabledInitially()
+    {
+        var dialog = new SearchDialog(new FakeSearchService(), "/test/path");
+
+        Assert.False(dialog.ShowInTreeButton.Enabled);
+    }
+
+    [Fact]
+    public async Task ShowInTreeButton_EnabledOnlyAfterSearchCompletes()
+    {
+        var streamingSearch = new StreamingSearchService();
+        var dialog = new SearchDialog(streamingSearch, "/test/path");
+        dialog.QueryInput.Text = "needle";
+
+        await Task.Delay(450);
+
+        Assert.Contains("Searching... found 1 matches", dialog.StatusLabel.Text);
+        Assert.False(dialog.ShowInTreeButton.Enabled);
+
+        await Task.Delay(700);
+
+        Assert.Contains("Found 2 matches in", dialog.StatusLabel.Text);
+        Assert.True(dialog.ShowInTreeButton.Enabled);
+    }
+
+    [Fact]
+    public async Task ShowInTreeButton_DisabledAgainWhenNewSearchStarts()
+    {
+        var fakeSearch = new FakeSearchService();
+        fakeSearch.ResultsToReturn.Add(CreateFileMatch());
+        var dialog = new SearchDialog(fakeSearch, "/test/path");
+        dialog.QueryInput.Text = "MyMethod";
+
+        await Task.Delay(500);
+        Assert.True(dialog.ShowInTreeButton.Enabled);
+
+        dialog.QueryInput.Text = "AnotherQuery";
+
+        Assert.False(dialog.ShowInTreeButton.Enabled);
+    }
+
+    [Fact]
+    public async Task ShowInTreeButton_NotEnabledWhenNoResultsFound()
+    {
+        var fakeSearch = new FakeSearchService();
+        var dialog = new SearchDialog(fakeSearch, "/test/path");
+        dialog.QueryInput.Text = "nothing";
+
+        await Task.Delay(500);
+
+        Assert.Contains("No matches found", dialog.StatusLabel.Text);
+        Assert.False(dialog.ShowInTreeButton.Enabled);
+    }
+
+    [Fact]
+    public async Task RequestShowInTree_PublishesDistinctResultSnapshot()
+    {
+        var fakeSearch = new FakeSearchService();
+        fakeSearch.ResultsToReturn.Add(CreateFileMatch());
+        fakeSearch.ResultsToReturn.Add(CreateFileMatch());
+        IReadOnlyList<SearchResult>? received = null;
+        var dialog = new SearchDialog(fakeSearch, "/test/path");
+        dialog.ShowInTreeRequested += results => received = results;
+        dialog.QueryInput.Text = "MyMethod";
+
+        await Task.Delay(500);
+        dialog.RequestShowInTree();
+
+        Assert.NotNull(received);
+        Assert.Equal(2, received!.Count);
+    }
+
+    [Fact]
+    public void RequestShowInTree_WithoutResults_DoesNotPublish()
+    {
+        var dialog = new SearchDialog(new FakeSearchService(), "/test/path");
+        var published = false;
+        dialog.ShowInTreeRequested += _ => published = true;
+
+        dialog.RequestShowInTree();
+
+        Assert.False(published);
     }
 
     [Fact]
