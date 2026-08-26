@@ -288,7 +288,12 @@ internal sealed class ExplorerWindow : Window
 
         FileTree.KeyDown += (sender, keyEvent) =>
         {
-            if (keyEvent == Key.Enter)
+            if (keyEvent == Key.Backspace)
+            {
+                DeleteSelected();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.Enter)
             {
                 var selected = FileTree.SelectedObject;
                 if (selected is { Kind: FileSystemEntryKind.File })
@@ -1029,7 +1034,7 @@ internal sealed class ExplorerWindow : Window
             "  Ctrl+S            Save modifications to the active file\n" +
             "  Ctrl+N            Create a new file in the selected directory\n" +
             "  F2                Rename the selected file or directory inline\n" +
-            "  Del               Delete the selected file or directory\n" +
+            "  Del / Backspace   Delete the selected file or directory (Backspace in tree only)\n" +
             "  F5                Reload the selected file from disk\n" +
             "  Ctrl+L            Load a large (> 2 MB) or binary file as text on demand\n" +
             "  F8                Open selected file with default OS application\n\n" +

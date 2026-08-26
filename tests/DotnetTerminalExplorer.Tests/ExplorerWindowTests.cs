@@ -526,6 +526,38 @@ public sealed class ExplorerWindowTests
     }
 
     [Fact]
+    public void Backspace_DeletesSelectedFileWhenFileTreeIsFocused()
+    {
+        var tree = new FakeFileTreeService();
+        var mutation = new FakeMutationService();
+        using var window = CreateWindow(tree, mutationService: mutation);
+        window.FileTree.SelectedObject = tree.File;
+        window.FileTree.SetFocus();
+
+        var handled = window.FileTree.NewKeyDownEvent(Key.Backspace);
+
+        Assert.True(handled);
+        Assert.Equal([tree.File.FullPath], mutation.DeletedEntries.Select(e => e.FullPath));
+    }
+
+    [Fact]
+    public void Backspace_DoesNotDeleteSelectedFileWhenEditorIsFocused()
+    {
+        var tree = new FakeFileTreeService();
+        var preview = new FakeFileService();
+        var mutation = new FakeMutationService();
+        preview.ContentByPath[tree.File.FullPath] = "editable content";
+        using var window = CreateWindow(tree, preview, mutationService: mutation);
+        window.FileTree.SelectedObject = tree.File;
+        window.Preview.SetFocus();
+
+        window.Preview.NewKeyDownEvent(Key.Backspace);
+
+        Assert.True(window.Preview.HasFocus);
+        Assert.Empty(mutation.DeletedEntries);
+    }
+
+    [Fact]
     public void DeleteShortcut_DoesNothingWhenRootIsSelected()
     {
         var tree = new FakeFileTreeService();
