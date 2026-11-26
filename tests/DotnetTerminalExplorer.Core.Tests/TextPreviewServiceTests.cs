@@ -1,6 +1,6 @@
+using System.Buffers.Binary;
+using System.IO.Compression;
 using DotnetTerminalExplorer.Core;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 namespace DotnetTerminalExplorer.Core.Tests;
 
@@ -99,10 +99,7 @@ public sealed class TextPreviewServiceTests
     {
         using var directory = new TemporaryDirectory();
         var imgPath = Path.Combine(directory.Path, "test.png");
-        using (var img = new SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>(16, 32))
-        {
-            img.SaveAsPng(imgPath);
-        }
+        WriteSolidPng(imgPath, width: 16, height: 32, r: 200, g: 100, b: 50, a: 255);
 
         var service = new TextPreviewService();
         var result = service.Read(Entry(imgPath));
@@ -110,6 +107,23 @@ public sealed class TextPreviewServiceTests
         Assert.Equal(TextPreviewKind.Image, result.Kind);
         Assert.Contains("16x32", result.Text);
         Assert.Contains("PNG", result.Text);
+    }
+
+    [Fact]
+    public void ImageDecoder_DecodeThumbnail_DecodesAndScalesPreservingAspectRatioAndColor()
+    {
+        using var directory = new TemporaryDirectory();
+        var imgPath = Path.Combine(directory.Path, "banner.png");
+        WriteSolidPng(imgPath, width: 40, height: 20, r: 64, g: 128, b: 192, a: 255);
+
+        var thumb = ImageDecoder.DecodeThumbnail(imgPath, maxWidth: 10, maxHeight: 10);
+
+        Assert.NotNull(thumb);
+        Assert.Equal(10, thumb!.Width);
+        Assert.Equal(5, thumb.Height);
+
+        var pixel = thumb.GetPixel(5, 2);
+        Assert.Equal((64, 128, 192, 255), pixel);
     }
 
     [Fact]
@@ -168,4 +182,85 @@ public sealed class TextPreviewServiceTests
             Path.GetFileName(path),
             FileSystemEntryKind.File,
             IsReparsePoint: false);
+
+    private static void WriteSolidPng(string path, int width, int height, byte r, byte g, byte b, byte a)
+    {
+        using var output = File.Create(path);
+        // PNG signature
+        output.Write([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        // IHDR chunk
+        var ihdr = new byte[13];
+        BinaryPrimitives.WriteInt32BigEndian(ihdr.AsSpan(0, 4), width);
+        BinaryPrimitives.WriteInt32BigEndian(ihdr.AsSpan(4, 4), height);
+        ihdr[8] = 8; // bit depth
+        ihdr[9] = 6; // RGBA
+        WritePngChunk(output, "IHDR"u8, ihdr);
+
+        // Raw scanlines (filter byte 0 + RGBA pixels per row)
+        var raw = new byte[height * (1 + (width * 4))];
+        for (var y = 0; y < height; y++)
+        {
+            var rowStart = y * (1 + (width * 4));
+            raw[rowStart] = 0;
+            for (var x = 0; x < width; x++)
+            {
+                var px = rowStart + 1 + (x * 4);
+                raw[px] = r;
+                raw[px + 1] = g;
+                raw[px + 2] = b;
+                raw[px + 3] = a;
+            }
+        }
+
+        using var compressed = new MemoryStream();
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+        {
+            zlib.Write(raw);
+        }
+
+        WritePngChunk(output, "IDAT"u8, compressed.ToArray());
+        WritePngChunk(output, "IEND"u8, []);
+    }
+
+    private static void WritePngChunk(Stream output, ReadOnlySpan<byte> type, ReadOnlySpan<byte> data)
+    {
+        Span<byte> lengthBytes = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32BigEndian(lengthBytes, data.Length);
+        output.Write(lengthBytes);
+        output.Write(type);
+        output.Write(data);
+
+        var crc = ComputeCrc32(type, data);
+        Span<byte> crcBytes = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(crcBytes, crc);
+        output.Write(crcBytes);
+    }
+
+    private static uint ComputeCrc32(ReadOnlySpan<byte> type, ReadOnlySpan<byte> data)
+    {
+        uint crc = 0xFFFFFFFF;
+        foreach (var b in type)
+        {
+            crc = UpdateCrc(crc, b);
+        }
+
+        foreach (var b in data)
+        {
+            crc = UpdateCrc(crc, b);
+        }
+
+        return crc ^ 0xFFFFFFFF;
+    }
+
+    private static uint UpdateCrc(uint crc, byte value)
+    {
+        crc ^= value;
+        for (var bit = 0; bit < 8; bit++)
+        {
+            crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+        }
+
+        return crc;
+    }
 }

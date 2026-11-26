@@ -1,8 +1,5 @@
 using System.Text;
 using DotnetTerminalExplorer.Core;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.ViewBase;
 using TuiAttribute = Terminal.Gui.Drawing.Attribute;
@@ -20,7 +17,7 @@ internal sealed class ImagePreviewView : View
 
     private string? _filePath;
     private string? _headerInfo;
-    private Image<Rgba32>? _cachedThumbnail;
+    private RgbaImage? _cachedThumbnail;
     private int _cachedWidth;
     private int _cachedHeight;
     private int _decodeVersion;
@@ -131,11 +128,11 @@ internal sealed class ImagePreviewView : View
                     break;
                 }
 
-                var topPixel = _cachedThumbnail[x, y];
-                var botPixel = (y + 1 < thumbHeight) ? _cachedThumbnail[x, y + 1] : topPixel;
+                var topPixel = _cachedThumbnail.GetPixel(x, y);
+                var botPixel = (y + 1 < thumbHeight) ? _cachedThumbnail.GetPixel(x, y + 1) : topPixel;
 
-                var fg = new TuiColor(topPixel.R, topPixel.G, topPixel.B);
-                var bg = new TuiColor(botPixel.R, botPixel.G, botPixel.B);
+                var fg = BlendOverBlack(topPixel);
+                var bg = BlendOverBlack(botPixel);
 
                 SetAttribute(new TuiAttribute(fg, bg));
                 AddRune(drawX, drawY, (Rune)'▀');
@@ -190,22 +187,15 @@ internal sealed class ImagePreviewView : View
         }
         catch
         {
-            // The application was shut down while decoding; dispose and ignore.
-            thumbnail?.Dispose();
+            // The application was shut down while decoding; nothing to update.
         }
     }
 
-    private static Image<Rgba32>? DecodeThumbnail(string filePath, int targetPixelWidth, int targetPixelHeight)
+    private static RgbaImage? DecodeThumbnail(string filePath, int targetPixelWidth, int targetPixelHeight)
     {
         try
         {
-            using var original = Image.Load<Rgba32>(filePath);
-            return original.Clone(ctx => ctx.Resize(new ResizeOptions
-            {
-                Size = new Size(targetPixelWidth, targetPixelHeight),
-                Mode = ResizeMode.Max,
-                Sampler = KnownResamplers.Bicubic,
-            }));
+            return ImageDecoder.DecodeThumbnail(filePath, targetPixelWidth, targetPixelHeight);
         }
         catch
         {
@@ -213,12 +203,30 @@ internal sealed class ImagePreviewView : View
         }
     }
 
-    private void StoreThumbnail(int version, string filePath, Image<Rgba32>? thumbnail, int targetPixelWidth, int targetPixelHeight)
+    private static TuiColor BlendOverBlack((byte R, byte G, byte B, byte A) pixel)
+    {
+        if (pixel.A == byte.MaxValue)
+        {
+            return new TuiColor(pixel.R, pixel.G, pixel.B);
+        }
+
+        if (pixel.A == 0)
+        {
+            return new TuiColor(0, 0, 0);
+        }
+
+        var alpha = pixel.A / 255.0;
+        return new TuiColor(
+            (byte)Math.Round(pixel.R * alpha),
+            (byte)Math.Round(pixel.G * alpha),
+            (byte)Math.Round(pixel.B * alpha));
+    }
+
+    private void StoreThumbnail(int version, string filePath, RgbaImage? thumbnail, int targetPixelWidth, int targetPixelHeight)
     {
         if (version != _decodeVersion || _filePath != filePath)
         {
             // A newer selection or resize superseded this decode.
-            thumbnail?.Dispose();
             return;
         }
 
@@ -239,7 +247,6 @@ internal sealed class ImagePreviewView : View
 
     private void ClearCache()
     {
-        _cachedThumbnail?.Dispose();
         _cachedThumbnail = null;
         _cachedWidth = 0;
         _cachedHeight = 0;

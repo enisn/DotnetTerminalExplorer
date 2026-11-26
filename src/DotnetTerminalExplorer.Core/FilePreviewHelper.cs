@@ -1,5 +1,3 @@
-using SixLabors.ImageSharp;
-
 namespace DotnetTerminalExplorer.Core;
 
 internal static class FilePreviewHelper
@@ -28,11 +26,10 @@ internal static class FilePreviewHelper
                     var fileInfo = new FileInfo(entry.FullPath);
                     try
                     {
-                        var imageInfo = Image.Identify(entry.FullPath);
-                        if (imageInfo is not null)
+                        var imageInfo = ImageDecoder.Identify(entry.FullPath);
+                        if (imageInfo is { } info)
                         {
-                            var formatName = imageInfo.Metadata.DecodedImageFormat?.Name ?? Path.GetExtension(entry.FullPath).TrimStart('.').ToUpperInvariant();
-                            var header = $"Format: {formatName} | Dimensions: {imageInfo.Width}x{imageInfo.Height} | Size: {FileTypeClassifier.FormatFileSize(fileInfo.Length)}";
+                            var header = $"Format: {info.FormatName} | Dimensions: {info.Width}x{info.Height} | Size: {FileTypeClassifier.FormatFileSize(fileInfo.Length)}";
                             return TextPreview.ForImage(header);
                         }
                     }
