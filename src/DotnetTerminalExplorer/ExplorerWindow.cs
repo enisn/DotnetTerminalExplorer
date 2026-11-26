@@ -4,6 +4,7 @@ using System.Drawing;
 using DotnetTerminalExplorer.Core;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -43,6 +44,8 @@ internal sealed class ExplorerWindow : Window
     private readonly ITextPreviewService _previewService;
     private readonly IFileMutationService _mutationService;
     private readonly ISearchService _searchService;
+    private readonly IEntrySizeService _sizeService;
+    private readonly bool _ownsSizeService;
     private readonly Func<FileSystemEntry, bool> _confirmDelete;
     private readonly Func<bool> _confirmExit;
     private readonly Action _showHelp;
@@ -58,6 +61,10 @@ internal sealed class ExplorerWindow : Window
     private TextPreviewKind? _previewKind;
     private bool _advancingLoadMore;
     private bool _focusEditorOnLoaded;
+    private FileTreeSortOptions _sortOptions = FileTreeSortOptions.Default;
+    private bool _showSizes;
+    private bool _suppressSelectionReload;
+    private bool _disposed;
     private readonly HashSet<string> _forcedPreviewPaths = new(StringComparer.Ordinal);
 
     public ExplorerWindow(
@@ -70,7 +77,8 @@ internal sealed class ExplorerWindow : Window
         Action? showHelp = null,
         IApplication? application = null,
         ISearchService? searchService = null,
-        Func<bool>? confirmExit = null)
+        Func<bool>? confirmExit = null,
+        IEntrySizeService? sizeService = null)
     {
         ArgumentNullException.ThrowIfNull(fileTree);
         ArgumentNullException.ThrowIfNull(previewService);
@@ -83,6 +91,8 @@ internal sealed class ExplorerWindow : Window
         _requestStop = requestStop;
         _mutationService = mutationService ?? new FileMutationService();
         _searchService = searchService ?? new FastSearchEngine();
+        _ownsSizeService = sizeService is null;
+        _sizeService = sizeService ?? new EntrySizeService();
         _confirmDelete = confirmDelete ?? ConfirmDeleteViaMessageBox;
         _confirmExit = confirmExit ?? ConfirmExitViaMessageBox;
         _showHelp = showHelp ?? ShowHelpViaDialog;
@@ -111,8 +121,13 @@ internal sealed class ExplorerWindow : Window
             Width = Dim.Fill(),
             Height = Dim.Fill(StatusBar),
         };
-        TreeBuilder = new FileSystemTreeBuilder(fileTree);
-        FileTree = new TreeView<FileSystemEntry>
+        TreeBuilder = new FileSystemTreeBuilder(fileTree)
+        {
+            SizeProvider = GetEntrySizeForSorting,
+        };
+        TreeBuilder.DirectoryPageLoaded += OnDirectoryPageLoaded;
+        _sizeService.SizesUpdated += OnSizesUpdated;
+        FileTree = new ExplorerTreeView
         {
             X = 0,
             Y = 0,
@@ -120,6 +135,8 @@ internal sealed class ExplorerWindow : Window
             Height = Dim.Fill(),
             MultiSelect = false,
             TreeBuilder = TreeBuilder,
+            AspectGetter = FormatTreeEntry,
+            InterceptKeyDown = HandleTreePreKeyDown,
         };
         RebindRecursiveExpandToSingleLevel();
         RenameInput = new TextField
@@ -170,11 +187,20 @@ internal sealed class ExplorerWindow : Window
         };
         FindBar.OnClose = () => Preview.SetFocus();
 
-        FileTree.SelectionChanged += (_, eventArgs) => ShowSelection(eventArgs.NewValue);
+        FileTree.SelectionChanged += (_, eventArgs) =>
+        {
+            if (_suppressSelectionReload)
+            {
+                return;
+            }
+
+            ShowSelection(eventArgs.NewValue);
+        };
         Preview.ContentsChanged += (_, _) => UpdatePreviewTitle();
 
         // Ctrl+H must open the replace bar even though TextView binds it (and terminals
         // that encode Ctrl+H as 0x08 deliver it as Ctrl+Backspace) to word-delete.
+        // Ctrl+P opens the universal Command Menu from anywhere, including inside the editor.
         // A KeyDown subscriber runs before the built-in key bindings, so intercept here.
         Preview.KeyDown += (sender, keyEvent) =>
         {
@@ -183,11 +209,21 @@ internal sealed class ExplorerWindow : Window
                 TriggerContextAwareReplace();
                 keyEvent.Handled = true;
             }
+            else if (keyEvent == Key.P.WithCtrl)
+            {
+                OpenCommandPalette();
+                keyEvent.Handled = true;
+            }
         };
 
         KeyDown += (sender, keyEvent) =>
         {
-            if (keyEvent == Key.CursorLeft.WithAlt || keyEvent == new Key('[').WithAlt)
+            if (keyEvent == Key.P.WithCtrl)
+            {
+                OpenCommandPalette();
+                keyEvent.Handled = true;
+            }
+            else if (keyEvent == Key.CursorLeft.WithAlt || keyEvent == new Key('[').WithAlt)
             {
                 ShrinkLeftPane();
                 keyEvent.Handled = true;
@@ -367,6 +403,8 @@ internal sealed class ExplorerWindow : Window
 
     internal Shortcut HelpShortcut { get; private set; } = null!;
 
+    internal Shortcut MenuShortcut { get; private set; } = null!;
+
     internal Shortcut SearchShortcut { get; private set; } = null!;
 
     internal Shortcut ClearFilterShortcut { get; private set; } = null!;
@@ -390,6 +428,10 @@ internal sealed class ExplorerWindow : Window
     public int? CustomLeftPaneWidth => _customLeftPaneWidth;
 
     public int CalculatedLeftPaneWidth => GetCalculatedLeftPaneWidth();
+
+    public FileTreeSortOptions SortOptions => _sortOptions;
+
+    public bool ShowSizes => _showSizes;
 
     public bool IsDirty =>
         _loadedEntry is { Kind: FileSystemEntryKind.File }
@@ -449,6 +491,745 @@ internal sealed class ExplorerWindow : Window
         SetNeedsDraw();
     }
 
+    public void SetLeftPaneWidth(int width)
+    {
+        var totalWidth = Viewport.Width > 0 ? Viewport.Width : 80;
+        var minW = Math.Min(MinLeftPaneWidth, Math.Max(10, totalWidth / 2));
+        var maxW = Math.Max(minW, totalWidth - MinRightPaneWidth);
+        _customLeftPaneWidth = Math.Clamp(width, minW, maxW);
+        FileTreePane.SetNeedsLayout();
+        PreviewPane.SetNeedsLayout();
+        SetNeedsLayout();
+        SetNeedsDraw();
+    }
+
+    public void TogglePaneFocus()
+    {
+        if (FileTree.HasFocus)
+        {
+            if (Preview.Visible)
+            {
+                Preview.SetFocus();
+            }
+            else if (ImagePreview.Visible)
+            {
+                ImagePreview.SetFocus();
+            }
+        }
+        else
+        {
+            FileTree.SetFocus();
+        }
+    }
+
+    public void SetSortOptions(FileTreeSortOptions sortOptions, bool enableSizesWhenSortingBySize = true)
+    {
+        ArgumentNullException.ThrowIfNull(sortOptions);
+
+        if (sortOptions.Field == FileTreeSortField.Size && enableSizesWhenSortingBySize && !_showSizes)
+        {
+            _showSizes = true;
+        }
+
+        _sortOptions = sortOptions;
+        var previousSelection = FileTree.SelectedObject;
+
+        TreeBuilder.SetSortOptions(sortOptions);
+        _suppressSelectionReload = true;
+        try
+        {
+            FileTree.RebuildTree();
+            FileTree.Expand(_fileTreeService.Root);
+            if (previousSelection is not null)
+            {
+                FileTree.SelectedObject = previousSelection;
+            }
+        }
+        finally
+        {
+            _suppressSelectionReload = false;
+        }
+
+        UpdateFileTreeTitle();
+        FileTree.SetNeedsDraw();
+
+        if (_showSizes)
+        {
+            RequestSizesForLoadedEntries();
+        }
+    }
+
+    public void SetShowSizes(bool enabled)
+    {
+        if (_showSizes == enabled)
+        {
+            return;
+        }
+
+        _showSizes = enabled;
+
+        if (enabled)
+        {
+            // Render the list immediately first; sizes calculate lazily in background.
+            UpdateFileTreeTitle();
+            if (_loadedEntry is { IsDirectory: true } selectedDir)
+            {
+                ShowPreview(FormatDirectoryPreview(selectedDir));
+            }
+            FileTree.SetNeedsDraw();
+            RequestSizesForLoadedEntries();
+        }
+        else
+        {
+            _sizeService.CancelPending();
+            UpdateFileTreeTitle();
+            if (_loadedEntry is { IsDirectory: true })
+            {
+                ShowPreview(TextPreview.ForDirectory().Text);
+            }
+            FileTree.SetNeedsDraw();
+        }
+    }
+
+    public void RecalculateSizes()
+    {
+        _sizeService.Clear();
+        _showSizes = true;
+        UpdateFileTreeTitle();
+        if (_loadedEntry is { IsDirectory: true } selectedDir)
+        {
+            ShowPreview(FormatDirectoryPreview(selectedDir));
+        }
+        FileTree.SetNeedsDraw();
+        RequestSizesForLoadedEntries();
+    }
+
+    public void OpenCommandPalette()
+    {
+        if (_application is null)
+        {
+            return;
+        }
+
+        var selected = FileTree.SelectedObject;
+        var context = selected is null
+            ? null
+            : selected == _fileTreeService.Root
+                ? $"Selected: {selected.Name} (root)"
+                : $"Selected: {selected.Name}";
+
+        var items = BuildCommandPaletteItems();
+        using var dialog = new CommandPaletteDialog(
+            items,
+            context,
+            Viewport.Width,
+            Viewport.Height);
+
+        _application.Run(dialog);
+
+        var chosen = dialog.SelectedCommand;
+        if (chosen is not null)
+        {
+            chosen.Execute();
+        }
+    }
+
+    public void OpenViewSettings()
+    {
+        if (_application is null)
+        {
+            return;
+        }
+
+        using var dialog = new ViewSettingsDialog(
+            _sortOptions,
+            _showSizes,
+            adjustPaneWidth: delta =>
+            {
+                if (delta < 0)
+                {
+                    ShrinkLeftPane(-delta);
+                }
+                else
+                {
+                    ExpandLeftPane(delta);
+                }
+            },
+            resetPaneWidth: ResetLeftPaneWidth,
+            describePaneWidth: DescribePaneWidth,
+            ownerWidth: Viewport.Width,
+            ownerHeight: Viewport.Height);
+
+        _application.Run(dialog);
+
+        if (dialog.Applied)
+        {
+            var sortChanged = dialog.SelectedSortOptions != _sortOptions;
+            if (sortChanged)
+            {
+                SetSortOptions(dialog.SelectedSortOptions, enableSizesWhenSortingBySize: false);
+            }
+
+            SetShowSizes(dialog.SelectedShowSizes);
+        }
+    }
+
+    public void OpenResizePaneDialog()
+    {
+        if (_application is null)
+        {
+            return;
+        }
+
+        using var dialog = new ResizePaneDialog(
+            getCurrentWidth: GetCalculatedLeftPaneWidth,
+            getTotalWidth: () => Viewport.Width > 0 ? Viewport.Width : 80,
+            isAutoWidth: () => !_customLeftPaneWidth.HasValue,
+            shrink: ShrinkLeftPane,
+            expand: ExpandLeftPane,
+            setWidth: SetLeftPaneWidth,
+            resetWidth: ResetLeftPaneWidth);
+
+        _application.Run(dialog);
+    }
+
+    internal IReadOnlyList<CommandPaletteItem> BuildCommandPaletteItems()
+    {
+        var selected = FileTree.SelectedObject;
+        var hasNonRootSelection = selected is not null
+            && selected != _fileTreeService.Root
+            && selected.Kind != FileSystemEntryKind.LoadMore;
+        var isFile = _loadedEntry is { Kind: FileSystemEntryKind.File };
+        var isEditableText = isFile && _previewService is ITextFileService && !Preview.ReadOnly && Preview.Visible;
+        var isLoadablePreview = isFile && (_previewKind == TextPreviewKind.TooLarge || _previewKind == TextPreviewKind.Binary);
+        var canFindInFile = isFile && Preview.Visible;
+
+        string? ActiveBadge(FileTreeSortField field, FileTreeSortDirection dir) =>
+            _sortOptions.Field == field && _sortOptions.Direction == dir ? "[Active]" : null;
+
+        return
+        [
+            // File operations
+            new CommandPaletteItem(
+                "file.delete",
+                "File",
+                "Delete Selected",
+                "Del / Backspace",
+                hasNonRootSelection,
+                DeleteSelected,
+                DisabledReason: "Select a file or folder (not the root directory)."),
+            new CommandPaletteItem(
+                "file.rename",
+                "File",
+                "Rename Selected",
+                "F2",
+                hasNonRootSelection,
+                StartRename,
+                DisabledReason: "Select a file or folder (not the root directory)."),
+            new CommandPaletteItem(
+                "file.new",
+                "File",
+                "New File",
+                "Ctrl+N",
+                true,
+                StartCreate),
+            new CommandPaletteItem(
+                "file.save",
+                "File",
+                "Save File",
+                "Ctrl+S",
+                isEditableText,
+                SaveSelected,
+                DisabledReason: "Select an editable text file first."),
+            new CommandPaletteItem(
+                "file.reload",
+                "File",
+                "Reload Selected",
+                "F5",
+                true,
+                ReloadSelected),
+            new CommandPaletteItem(
+                "file.load",
+                "File",
+                "Load Large / Binary as Text",
+                "Ctrl+L",
+                isLoadablePreview,
+                LoadSelected,
+                DisabledReason: "Available when a large (>2 MB) or binary file is selected."),
+            new CommandPaletteItem(
+                "file.open-external",
+                "File",
+                "Open with External App",
+                "F8",
+                isFile,
+                EditSelected,
+                DisabledReason: "Select a file first."),
+
+            // View & Folder Sizes (opt-in, lazy)
+            new CommandPaletteItem(
+                "view.toggle-sizes",
+                "View",
+                "Show Folder & File Sizes (Lazy)",
+                "",
+                true,
+                () => SetShowSizes(!_showSizes),
+                StateBadge: _showSizes ? "[ON]" : "[OFF]"),
+            new CommandPaletteItem(
+                "view.recalc-sizes",
+                "View",
+                "Recalculate Folder Sizes",
+                "",
+                _showSizes,
+                RecalculateSizes,
+                DisabledReason: "Enable 'Show Folder & File Sizes' first."),
+
+            // Sorting
+            new CommandPaletteItem(
+                "sort.name-asc",
+                "Sort",
+                "Name (A → Z)",
+                "",
+                true,
+                () => SetSortOptions(new FileTreeSortOptions(FileTreeSortField.Name, FileTreeSortDirection.Ascending)),
+                StateBadge: ActiveBadge(FileTreeSortField.Name, FileTreeSortDirection.Ascending)),
+            new CommandPaletteItem(
+                "sort.name-desc",
+                "Sort",
+                "Name (Z → A)",
+                "",
+                true,
+                () => SetSortOptions(new FileTreeSortOptions(FileTreeSortField.Name, FileTreeSortDirection.Descending)),
+                StateBadge: ActiveBadge(FileTreeSortField.Name, FileTreeSortDirection.Descending)),
+            new CommandPaletteItem(
+                "sort.modified-desc",
+                "Sort",
+                "Modified Date (Newest First)",
+                "",
+                true,
+                () => SetSortOptions(new FileTreeSortOptions(FileTreeSortField.Modified, FileTreeSortDirection.Descending)),
+                StateBadge: ActiveBadge(FileTreeSortField.Modified, FileTreeSortDirection.Descending)),
+            new CommandPaletteItem(
+                "sort.modified-asc",
+                "Sort",
+                "Modified Date (Oldest First)",
+                "",
+                true,
+                () => SetSortOptions(new FileTreeSortOptions(FileTreeSortField.Modified, FileTreeSortDirection.Ascending)),
+                StateBadge: ActiveBadge(FileTreeSortField.Modified, FileTreeSortDirection.Ascending)),
+            new CommandPaletteItem(
+                "sort.size-desc",
+                "Sort",
+                "Size (Largest First)",
+                "",
+                true,
+                () => SetSortOptions(new FileTreeSortOptions(FileTreeSortField.Size, FileTreeSortDirection.Descending)),
+                StateBadge: ActiveBadge(FileTreeSortField.Size, FileTreeSortDirection.Descending)),
+            new CommandPaletteItem(
+                "sort.size-asc",
+                "Sort",
+                "Size (Smallest First)",
+                "",
+                true,
+                () => SetSortOptions(new FileTreeSortOptions(FileTreeSortField.Size, FileTreeSortDirection.Ascending)),
+                StateBadge: ActiveBadge(FileTreeSortField.Size, FileTreeSortDirection.Ascending)),
+
+            // Search & Filter
+            new CommandPaletteItem(
+                "search.workspace",
+                "Search",
+                "Workspace Search",
+                "Ctrl+Shift+F",
+                true,
+                OpenWorkspaceSearch),
+            new CommandPaletteItem(
+                "search.find",
+                "Search",
+                "Find in Active File",
+                "Ctrl+F",
+                canFindInFile,
+                () => FindBar.Open(),
+                DisabledReason: "Select a previewable text file first."),
+            new CommandPaletteItem(
+                "search.replace",
+                "Search",
+                "Find & Replace in Active File",
+                "Ctrl+H",
+                canFindInFile,
+                () => FindBar.Open(replaceMode: true),
+                DisabledReason: "Select a previewable text file first."),
+            new CommandPaletteItem(
+                "search.clear-filter",
+                "Search",
+                "Clear Tree Filter",
+                "Alt+X / Esc",
+                IsTreeFiltered,
+                ClearTreeFilter,
+                DisabledReason: "No search filter is currently active."),
+
+            // Layout & Navigation
+            new CommandPaletteItem(
+                "layout.resize",
+                "Layout",
+                "Resize Left Pane…",
+                "< / >",
+                true,
+                OpenResizePaneDialog),
+            new CommandPaletteItem(
+                "layout.expand",
+                "Layout",
+                "Expand Left Pane (+8)",
+                "Alt+Right / >",
+                true,
+                () => ExpandLeftPane(8)),
+            new CommandPaletteItem(
+                "layout.shrink",
+                "Layout",
+                "Shrink Left Pane (-8)",
+                "Alt+Left / <",
+                true,
+                () => ShrinkLeftPane(8)),
+            new CommandPaletteItem(
+                "layout.reset",
+                "Layout",
+                "Reset Left Pane Width",
+                "",
+                true,
+                ResetLeftPaneWidth),
+            new CommandPaletteItem(
+                "nav.switch-pane",
+                "Navigation",
+                "Switch Pane Focus",
+                "Tab",
+                true,
+                TogglePaneFocus),
+
+            // General
+            new CommandPaletteItem(
+                "general.settings",
+                "General",
+                "View & Sort Settings…",
+                ",",
+                true,
+                OpenViewSettings),
+            new CommandPaletteItem(
+                "general.help",
+                "General",
+                "Keyboard Shortcuts & Help",
+                "F1",
+                true,
+                ShowHelp),
+            new CommandPaletteItem(
+                "general.quit",
+                "General",
+                "Quit",
+                "Esc",
+                true,
+                RequestExit),
+        ];
+    }
+
+    private string DescribePaneWidth()
+    {
+        var current = GetCalculatedLeftPaneWidth();
+        var total = Viewport.Width > 0 ? Viewport.Width : 80;
+        var mode = _customLeftPaneWidth.HasValue ? "Custom" : "Auto";
+        return $"{current}/{total} cols ({mode})";
+    }
+
+    internal string FormatTreeEntry(FileSystemEntry entry)
+    {
+        if (!_showSizes || entry.Kind == FileSystemEntryKind.LoadMore)
+        {
+            return entry.Name;
+        }
+
+        if (_sizeService.TryGetSize(entry.FullPath, out var info))
+        {
+            return info.State switch
+            {
+                EntrySizeState.SkippedLink => $"[    link] {entry.Name}",
+                EntrySizeState.Ready => FormatReadySizeEntry(entry.Name, info),
+                _ => $"[     ...] {entry.Name}",
+            };
+        }
+
+        if (entry == _fileTreeService.Root && TryComputeRootSumFromLoadedChildren(out var rootInfo))
+        {
+            return FormatReadySizeEntry(entry.Name, rootInfo);
+        }
+
+        return entry == _fileTreeService.Root
+            ? entry.Name
+            : $"[     ...] {entry.Name}";
+    }
+
+    private static string FormatReadySizeEntry(string name, EntrySizeInfo info)
+    {
+        var compact = FileTypeClassifier.FormatCompactSize(info.Bytes);
+        var badge = info.IsPartial ? "~" + compact : compact;
+        return $"[{badge,8}] {name}";
+    }
+
+    private bool TryComputeRootSumFromLoadedChildren(out EntrySizeInfo result)
+    {
+        result = default;
+        if (TreeBuilder.GetLoadMoreNode(_fileTreeService.Root) is not null)
+        {
+            return false;
+        }
+
+        var children = TreeBuilder.GetLoadedChildren(_fileTreeService.Root.FullPath);
+        if (children.Count == 0)
+        {
+            result = EntrySizeInfo.Ready(0);
+            return true;
+        }
+
+        long total = 0;
+        var isPartial = false;
+        foreach (var child in children)
+        {
+            if (!_sizeService.TryGetSize(child.FullPath, out var childInfo))
+            {
+                return false;
+            }
+
+            if (childInfo.State == EntrySizeState.Pending)
+            {
+                return false;
+            }
+
+            if (childInfo.State == EntrySizeState.Ready)
+            {
+                total += childInfo.Bytes;
+                isPartial |= childInfo.IsPartial;
+            }
+        }
+
+        result = EntrySizeInfo.Ready(total, isPartial);
+        return true;
+    }
+
+    private string FormatDirectoryPreview(FileSystemEntry directory)
+    {
+        if (!_showSizes)
+        {
+            return TextPreview.ForDirectory().Text;
+        }
+
+        string sizeLine;
+        if (_sizeService.TryGetSize(directory.FullPath, out var info))
+        {
+            sizeLine = info.State switch
+            {
+                EntrySizeState.SkippedLink => "Skipped (symbolic link)",
+                EntrySizeState.Ready => info.IsPartial
+                    ? $"{FileTypeClassifier.FormatFileSize(info.Bytes)} (partial — some entries inaccessible)"
+                    : FileTypeClassifier.FormatFileSize(info.Bytes),
+                _ => "Calculating in background...",
+            };
+        }
+        else if (directory == _fileTreeService.Root && TryComputeRootSumFromLoadedChildren(out var rootInfo))
+        {
+            sizeLine = rootInfo.IsPartial
+                ? $"{FileTypeClassifier.FormatFileSize(rootInfo.Bytes)} (partial — some entries inaccessible)"
+                : FileTypeClassifier.FormatFileSize(rootInfo.Bytes);
+        }
+        else
+        {
+            sizeLine = "Calculating in background...";
+        }
+
+        return $"""
+            {TextPreview.ForDirectory().Text}
+
+            Directory: {directory.Name}
+            Path:      {directory.FullPath}
+            Size:      {sizeLine}
+            """;
+    }
+
+    private long? GetEntrySizeForSorting(FileSystemEntry entry) =>
+        _sizeService.TryGetKnownBytes(entry.FullPath);
+
+    private void OnDirectoryPageLoaded(FileSystemEntry directory, IReadOnlyList<FileSystemEntry> loadedEntries)
+    {
+        if (!_showSizes || _disposed || loadedEntries.Count == 0)
+        {
+            return;
+        }
+
+        _sizeService.RequestSizes(loadedEntries);
+        UpdateFileTreeTitle();
+    }
+
+    private void RequestSizesForLoadedEntries()
+    {
+        var loadedEntries = TreeBuilder.GetLoadedEntriesSnapshot();
+        if (loadedEntries.Count > 0)
+        {
+            _sizeService.RequestSizes(loadedEntries);
+            UpdateFileTreeTitle();
+        }
+    }
+
+    private void OnSizesUpdated(IReadOnlyCollection<string> changedPaths)
+    {
+        if (_disposed || !_showSizes)
+        {
+            return;
+        }
+
+        void ApplyUpdate()
+        {
+            if (_disposed || !_showSizes)
+            {
+                return;
+            }
+
+            if (_sortOptions.Field == FileTreeSortField.Size &&
+                TreeBuilder.ResortLoadedDirectories(changedPaths, out var affectedParents))
+            {
+                var previousSelection = FileTree.SelectedObject;
+                _suppressSelectionReload = true;
+                try
+                {
+                    foreach (var parent in affectedParents)
+                    {
+                        FileTree.RefreshObject(parent, startAtTop: false);
+                    }
+
+                    if (previousSelection is not null)
+                    {
+                        FileTree.SelectedObject = previousSelection;
+                    }
+                }
+                finally
+                {
+                    _suppressSelectionReload = false;
+                }
+            }
+
+            if (_loadedEntry is { IsDirectory: true } selectedDir)
+            {
+                ShowPreview(FormatDirectoryPreview(selectedDir));
+            }
+
+            UpdateFileTreeTitle();
+            FileTree.SetNeedsDraw();
+        }
+
+        if (_application is null)
+        {
+            ApplyUpdate();
+            return;
+        }
+
+        try
+        {
+            _application.Invoke(ApplyUpdate);
+        }
+        catch
+        {
+            // The application was shut down while updating; nothing to update.
+        }
+    }
+
+    private void UpdateFileTreeTitle()
+    {
+        List<string>? tags = null;
+
+        if (IsTreeFiltered)
+        {
+            tags ??= [];
+            tags.Add("filtered");
+        }
+
+        if (_sortOptions != FileTreeSortOptions.Default)
+        {
+            tags ??= [];
+            tags.Add(_sortOptions.FormatShortLabel());
+        }
+
+        if (_showSizes)
+        {
+            tags ??= [];
+            tags.Add(_sizeService.IsCalculating ? "sizes…" : "sizes");
+        }
+
+        FileTreePane.Title = tags is null
+            ? "Files"
+            : $"Files ({string.Join(", ", tags)})";
+    }
+
+    private bool HandleTreePreKeyDown(Key keyEvent)
+    {
+        if (IsPlainRune(keyEvent, ':'))
+        {
+            OpenCommandPalette();
+            return true;
+        }
+
+        if (IsPlainRune(keyEvent, ','))
+        {
+            OpenViewSettings();
+            return true;
+        }
+
+        if (IsPlainRune(keyEvent, '<'))
+        {
+            ShrinkLeftPane();
+            return true;
+        }
+
+        if (IsPlainRune(keyEvent, '>'))
+        {
+            ExpandLeftPane();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsPlainRune(Key keyEvent, char ch) =>
+        !keyEvent.IsCtrl
+        && !keyEvent.IsAlt
+        && (keyEvent.AsRune.Value == ch
+            || keyEvent.NoShift.AsRune.Value == ch
+            || (uint)(keyEvent.KeyCode & KeyCode.CharMask) == ch);
+
+    private sealed class ExplorerTreeView : TreeView<FileSystemEntry>
+    {
+        public Func<Key, bool>? InterceptKeyDown { get; set; }
+
+        protected override bool OnKeyDown(Key key)
+        {
+            if (InterceptKeyDown?.Invoke(key) == true)
+            {
+                return true;
+            }
+
+            return base.OnKeyDown(key);
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (!_disposed && disposing)
+        {
+            _disposed = true;
+            TreeBuilder.DirectoryPageLoaded -= OnDirectoryPageLoaded;
+            _sizeService.SizesUpdated -= OnSizesUpdated;
+            _sizeService.CancelPending();
+            if (_ownsSizeService)
+            {
+                _sizeService.Dispose();
+            }
+        }
+
+        base.Dispose(disposing);
+    }
+
     public void ShowHelp()
     {
         _showHelp();
@@ -457,6 +1238,10 @@ internal sealed class ExplorerWindow : Window
     private StatusBar CreateStatusBar()
     {
         HelpShortcut = new Shortcut(Key.F1, "Help", ShowHelp)
+        {
+            BindKeyToApplication = true,
+        };
+        MenuShortcut = new Shortcut(Key.P.WithCtrl, "Menu", OpenCommandPalette)
         {
             BindKeyToApplication = true,
         };
@@ -509,6 +1294,7 @@ internal sealed class ExplorerWindow : Window
 
         return new StatusBar([
             HelpShortcut,
+            MenuShortcut,
             SearchShortcut,
             ClearFilterShortcut,
             SaveShortcut,
@@ -590,7 +1376,7 @@ internal sealed class ExplorerWindow : Window
             ImagePreview.Clear();
             Preview.Visible = true;
             Preview.ReadOnly = true;
-            ShowPreview(TextPreview.ForDirectory().Text);
+            ShowPreview(entry is not null ? FormatDirectoryPreview(entry) : TextPreview.ForDirectory().Text);
         }
         else
         {
@@ -754,6 +1540,11 @@ internal sealed class ExplorerWindow : Window
         if (saveResult.Success)
         {
             _savedContent = Preview.Text;
+            _sizeService.InvalidatePathAndAncestors(selectedFile.FullPath, _fileTreeService.Root.FullPath);
+            if (_showSizes)
+            {
+                RequestSizesForLoadedEntries();
+            }
             UpdatePreviewTitle();
         }
         else
@@ -815,9 +1606,14 @@ internal sealed class ExplorerWindow : Window
             _creatingInDirectory = null;
 
             TreeBuilder.Invalidate(targetDir.FullPath);
+            _sizeService.InvalidatePathAndAncestors(newEntry.FullPath, _fileTreeService.Root.FullPath);
             FileTree.RebuildTree();
             FileTree.SelectedObject = newEntry;
             ShowSelection(newEntry);
+            if (_showSizes)
+            {
+                RequestSizesForLoadedEntries();
+            }
             FileTree.SetFocus();
         }
         else
@@ -861,11 +1657,12 @@ internal sealed class ExplorerWindow : Window
             return;
         }
 
-        var renameResult = _mutationService.Rename(_renamingEntry, RenameInput.Text);
+        var originalEntry = _renamingEntry;
+        var renameResult = _mutationService.Rename(originalEntry, RenameInput.Text);
         if (renameResult.Success && renameResult.NewEntry is not null)
         {
             var updatedEntry = renameResult.NewEntry;
-            if (_loadedEntry == _renamingEntry)
+            if (_loadedEntry == originalEntry)
             {
                 _loadedEntry = updatedEntry;
             }
@@ -874,8 +1671,14 @@ internal sealed class ExplorerWindow : Window
             _renamingEntry = null;
 
             InvalidateParentCache(updatedEntry.FullPath);
+            _sizeService.InvalidatePathAndAncestors(originalEntry.FullPath, _fileTreeService.Root.FullPath);
+            _sizeService.InvalidatePathAndAncestors(updatedEntry.FullPath, _fileTreeService.Root.FullPath);
             FileTree.RebuildTree();
             FileTree.SelectedObject = updatedEntry;
+            if (_showSizes)
+            {
+                RequestSizesForLoadedEntries();
+            }
             UpdatePreviewTitle();
             UpdateShortcutStates();
             FileTree.SetFocus();
@@ -930,8 +1733,13 @@ internal sealed class ExplorerWindow : Window
 
             InvalidateParentCache(target.FullPath);
             TreeBuilder.Invalidate(target.FullPath);
+            _sizeService.InvalidatePathAndAncestors(target.FullPath, _fileTreeService.Root.FullPath);
             FileTree.RebuildTree();
             FileTree.SelectedObject = _fileTreeService.Root;
+            if (_showSizes)
+            {
+                RequestSizesForLoadedEntries();
+            }
             UpdatePreviewTitle();
             UpdateShortcutStates();
             FileTree.SetFocus();
@@ -1011,13 +1819,22 @@ internal sealed class ExplorerWindow : Window
 
         const string helpText =
             "Dotnet Terminal Explorer (dte)\n\n" +
+            "Menus & Settings (works over SSH / macOS / web consoles without Alt or Del):\n" +
+            "  Ctrl+P / :        Open the searchable Command Menu (every action & shortcut)\n" +
+            "  ,                 Open View & Sort Settings (Sort By, Order, Lazy Sizes, Width)\n" +
+            "  F1                Show this help dialog\n\n" +
             "Navigation & Layout:\n" +
             "  Tab               Switch focus between Files tree and Preview pane\n" +
+            "  < / >             Shrink / expand the left Files panel (in tree, no Alt needed)\n" +
             "  Alt+Left / Alt+[  Shrink the left Files panel\n" +
             "  Alt+Right / Alt+] Expand the left Files panel\n" +
             "  Up / Down         Navigate directories and select files\n" +
             "  Enter             Expand directory / Focus editor for text files\n" +
             "  Right / Ctrl+Right Expand the selected directory (one level)\n\n" +
+            "Sorting & Folder Sizes:\n" +
+            "  Command Menu / ,  Sort by Name, Modified Date, or Size (Asc / Desc)\n" +
+            "  Show Sizes        Opt-in lazy background folder & file size calculation\n" +
+            "                    (list always appears first; never blocks navigation)\n\n" +
             "Search & Replace:\n" +
             "  Ctrl+F / F3       Find in active file (if editor focused) or Workspace Search (if tree focused)\n" +
             "  Ctrl+Shift+F      Workspace Search across all files (Ripgrep speed)\n" +
@@ -1026,7 +1843,7 @@ internal sealed class ExplorerWindow : Window
             "  F3 / Enter        Next match in find bar\n" +
             "  Shift+F3 / S-Ent  Previous match in find bar\n" +
             "  Ctrl+H            Find & replace in active file (if editor focused)\n" +
-            "  Alt+R / Replace btn Show/hide replace field (Tab switches inputs)\n" +
+            "  Alt+R / Replace   Show/hide replace field (Tab switches inputs)\n" +
             "  Enter (replace)   Replace current match and advance\n" +
             "  Ctrl+Enter        Replace all matches\n" +
             "  Alt+C             Toggle case sensitivity in find bar\n\n" +
@@ -1039,24 +1856,41 @@ internal sealed class ExplorerWindow : Window
             "  Ctrl+L            Load a large (> 2 MB) or binary file as text on demand\n" +
             "  F8                Open selected file with default OS application\n\n" +
             "General:\n" +
-            "  F1                Show this help dialog\n" +
             "  Esc               Return to file tree (from editor) / Quit application with confirmation\n";
 
-        var dialog = new Dialog
+        var dialogWidth = Viewport.Width > 0 ? Math.Clamp(Viewport.Width - 4, 58, 86) : 84;
+        var dialogHeight = Viewport.Height > 0 ? Math.Clamp(Viewport.Height - 2, 16, 36) : 34;
+
+        var openMenuAfterClose = false;
+        using var dialog = new Dialog
         {
             Title = "Keyboard Shortcuts & Help",
-            Width = 84,
-            Height = 38,
+            Width = dialogWidth,
+            Height = dialogHeight,
         };
 
-        var label = new Label
+        var helpView = new TextView
         {
             X = 1,
             Y = 0,
             Width = Dim.Fill(1),
             Height = Dim.Fill(1),
-            TextAlignment = Alignment.Start,
+            ReadOnly = true,
+            WordWrap = true,
+            ScrollBars = true,
             Text = helpText,
+        };
+        helpView.SetScheme(PreviewColorScheme);
+
+        var openMenuButton = new Button
+        {
+            Text = "Open Menu (Ctrl+P)",
+        };
+        openMenuButton.Accepting += (_, e) =>
+        {
+            openMenuAfterClose = true;
+            dialog.RequestStop();
+            e.Handled = true;
         };
 
         var closeButton = new Button
@@ -1065,16 +1899,22 @@ internal sealed class ExplorerWindow : Window
             IsDefault = true,
         };
 
-        closeButton.Accepting += (s, e) =>
+        closeButton.Accepting += (_, e) =>
         {
             dialog.RequestStop();
             e.Handled = true;
         };
 
+        dialog.AddButton(openMenuButton);
         dialog.AddButton(closeButton);
-        dialog.Add(label);
+        dialog.Add(helpView);
 
         _application.Run(dialog);
+
+        if (openMenuAfterClose)
+        {
+            OpenCommandPalette();
+        }
     }
 
     public void TriggerContextAwareSearch()
@@ -1136,11 +1976,15 @@ internal sealed class ExplorerWindow : Window
 
         TreeBuilder.ApplyFilter(matchedFiles);
         IsTreeFiltered = true;
-        FileTreePane.Title = "Files (filtered)";
+        UpdateFileTreeTitle();
         ClearFilterShortcut.Enabled = true;
         FileTree.RebuildTree();
         FileTree.Expand(_fileTreeService.Root);
         FileTree.GoToFirst();
+        if (_showSizes)
+        {
+            RequestSizesForLoadedEntries();
+        }
         FileTree.SetFocus();
     }
 
@@ -1153,11 +1997,15 @@ internal sealed class ExplorerWindow : Window
 
         TreeBuilder.ClearFilter();
         IsTreeFiltered = false;
-        FileTreePane.Title = "Files";
+        UpdateFileTreeTitle();
         ClearFilterShortcut.Enabled = false;
         FileTree.RebuildTree();
         FileTree.Expand(_fileTreeService.Root);
         FileTree.GoToFirst();
+        if (_showSizes)
+        {
+            RequestSizesForLoadedEntries();
+        }
         FileTree.SetFocus();
     }
 

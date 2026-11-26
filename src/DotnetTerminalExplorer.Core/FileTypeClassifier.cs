@@ -138,6 +138,33 @@ public static class FileTypeClassifier
             : $"{size:0.##} {units[unitIndex]} ({bytes:N0} bytes)";
     }
 
+    public static string FormatCompactSize(long bytes)
+    {
+        if (bytes < 0)
+        {
+            bytes = 0;
+        }
+
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        double size = bytes;
+        int unitIndex = 0;
+
+        while (size >= 1024 && unitIndex < units.Length - 1)
+        {
+            size /= 1024;
+            unitIndex++;
+        }
+
+        if (unitIndex == 0)
+        {
+            return $"{bytes} B";
+        }
+
+        return size >= 100
+            ? string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0} {1}", size, units[unitIndex])
+            : string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.0} {1}", size, units[unitIndex]);
+    }
+
     private static string GetExtension(string pathOrExtension)
     {
         return pathOrExtension.StartsWith('.') && !pathOrExtension.Contains(Path.DirectorySeparatorChar) && !pathOrExtension.Contains(Path.AltDirectorySeparatorChar)

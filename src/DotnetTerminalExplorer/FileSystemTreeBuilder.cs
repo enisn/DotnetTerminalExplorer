@@ -16,12 +16,47 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
     private readonly Dictionary<string, FileSystemEntry> _parentByChild = new(StringComparer.Ordinal);
     private HashSet<string>? _filterVisiblePaths;
     private Dictionary<string, FileSystemEntry>? _filterFiles;
+    private FileTreeSortOptions _sortOptions = FileTreeSortOptions.Default;
+    private Func<FileSystemEntry, long?>? _sizeProvider;
 
-    private sealed class DirectoryState
+    public event Action<FileSystemEntry, IReadOnlyList<FileSystemEntry>>? DirectoryPageLoaded;
+
+    private sealed class DirectoryState(FileSystemEntry directory)
     {
+        public FileSystemEntry Directory { get; } = directory;
+
         public List<FileSystemEntry> Loaded { get; } = [];
 
         public bool HasMore { get; set; }
+    }
+
+    public FileTreeSortOptions SortOptions
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _sortOptions;
+            }
+        }
+    }
+
+    public Func<FileSystemEntry, long?>? SizeProvider
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _sizeProvider;
+            }
+        }
+        set
+        {
+            lock (_gate)
+            {
+                _sizeProvider = value;
+            }
+        }
     }
 
     public bool IsFilterActive
@@ -32,6 +67,106 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
             {
                 return _filterVisiblePaths is not null;
             }
+        }
+    }
+
+    public void SetSortOptions(FileTreeSortOptions sortOptions)
+    {
+        ArgumentNullException.ThrowIfNull(sortOptions);
+
+        lock (_gate)
+        {
+            _sortOptions = sortOptions;
+            _states.Clear();
+            _loadMoreByParent.Clear();
+            _parentByChild.Clear();
+        }
+    }
+
+    public void InvalidateAll()
+    {
+        lock (_gate)
+        {
+            _states.Clear();
+            _loadMoreByParent.Clear();
+            _parentByChild.Clear();
+        }
+    }
+
+    public IReadOnlyList<FileSystemEntry> GetLoadedEntriesSnapshot()
+    {
+        lock (_gate)
+        {
+            if (_filterVisiblePaths is { } visiblePaths && _filterFiles is { } filterFiles)
+            {
+                var list = new List<FileSystemEntry>(visiblePaths.Count);
+                foreach (var path in visiblePaths)
+                {
+                    if (filterFiles.TryGetValue(path, out var file))
+                    {
+                        list.Add(file);
+                    }
+                    else
+                    {
+                        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+                        list.Add(new FileSystemEntry(path, string.IsNullOrEmpty(name) ? path : name, FileSystemEntryKind.Directory, IsReparsePoint: false));
+                    }
+                }
+
+                return list;
+            }
+
+            var result = new List<FileSystemEntry>();
+            foreach (var state in _states.Values)
+            {
+                result.AddRange(state.Loaded);
+            }
+
+            return result;
+        }
+    }
+
+    public IReadOnlyList<FileSystemEntry> GetLoadedChildren(string directoryFullPath)
+    {
+        ArgumentNullException.ThrowIfNull(directoryFullPath);
+
+        lock (_gate)
+        {
+            return _states.TryGetValue(directoryFullPath, out var state)
+                ? [.. state.Loaded]
+                : [];
+        }
+    }
+
+    public bool ResortLoadedDirectories(
+        IEnumerable<string> changedPaths,
+        out List<FileSystemEntry> affectedParents)
+    {
+        ArgumentNullException.ThrowIfNull(changedPaths);
+        affectedParents = [];
+
+        lock (_gate)
+        {
+            if (_sortOptions.Field != FileTreeSortField.Size || _filterVisiblePaths is not null)
+            {
+                return false;
+            }
+
+            var seenParents = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var path in changedPaths)
+            {
+                if (_parentByChild.TryGetValue(path, out var parent) &&
+                    seenParents.Add(parent.FullPath) &&
+                    _states.TryGetValue(parent.FullPath, out var state) &&
+                    state.Loaded.Count > 1)
+                {
+                    var comparer = new FileSystemEntryComparer(_sortOptions, getSizeBytes: _sizeProvider);
+                    state.Loaded.Sort(comparer);
+                    affectedParents.Add(state.Directory);
+                }
+            }
+
+            return affectedParents.Count > 0;
         }
     }
 
@@ -93,6 +228,9 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
             return [];
         }
 
+        IReadOnlyList<FileSystemEntry>? newlyLoaded = null;
+        FileSystemEntry[] result;
+
         lock (_gate)
         {
             if (_filterVisiblePaths is { } visiblePaths)
@@ -100,11 +238,18 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
                 return GetFilteredChildren(forObject, visiblePaths);
             }
 
-            var state = EnsureState(forObject);
-            return state.HasMore
+            var state = EnsureState(forObject, out newlyLoaded);
+            result = state.HasMore
                 ? [.. state.Loaded, GetOrCreateLoadMoreNode(forObject)]
                 : [.. state.Loaded];
         }
+
+        if (newlyLoaded is { Count: > 0 })
+        {
+            DirectoryPageLoaded?.Invoke(forObject, newlyLoaded);
+        }
+
+        return result;
     }
 
     private List<FileSystemEntry> GetFilteredChildren(
@@ -136,10 +281,36 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
                 : new FileSystemEntry(path, name, FileSystemEntryKind.Directory, IsReparsePoint: false));
         }
 
-        children.Sort(static (left, right) => left.IsDirectory == right.IsDirectory
-            ? string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
-            : (left.IsDirectory ? -1 : 1));
+        if (_sortOptions == FileTreeSortOptions.Default)
+        {
+            children.Sort(static (left, right) => left.IsDirectory == right.IsDirectory
+                ? string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
+                : (left.IsDirectory ? -1 : 1));
+            return children;
+        }
+
+        children.Sort(new FileSystemEntryComparer(
+            _sortOptions,
+            getLastModifiedUtc: _sortOptions.Field == FileTreeSortField.Modified ? TryGetLastWriteTimeUtc : null,
+            getSizeBytes: _sortOptions.Field == FileTreeSortField.Size ? _sizeProvider : null));
         return children;
+    }
+
+    private static DateTime? TryGetLastWriteTimeUtc(FileSystemEntry entry)
+    {
+        try
+        {
+            var dt = entry.IsDirectory
+                ? Directory.GetLastWriteTimeUtc(entry.FullPath)
+                : File.GetLastWriteTimeUtc(entry.FullPath);
+            return dt.Year <= 1601 ? null : dt;
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or SecurityException)
+        {
+            return null;
+        }
     }
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
@@ -178,22 +349,24 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
             return false;
         }
 
+        FileSystemEntry? directory;
         lock (_gate)
         {
-            if (!_loadMoreByParent.TryGetValue(loadMore.FullPath, out var directory))
+            if (!_loadMoreByParent.TryGetValue(loadMore.FullPath, out directory))
             {
                 return false;
             }
-
-            parent = directory;
-            return Advance(directory);
         }
+
+        parent = directory;
+        return Advance(directory);
     }
 
     public bool Advance(FileSystemEntry directory)
     {
         ArgumentNullException.ThrowIfNull(directory);
 
+        IReadOnlyList<FileSystemEntry>? newlyLoaded;
         lock (_gate)
         {
             if (!_states.TryGetValue(directory.FullPath, out var state) || !state.HasMore)
@@ -201,9 +374,15 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
                 return false;
             }
 
-            LoadPage(directory, state);
-            return true;
+            newlyLoaded = LoadPage(directory, state);
         }
+
+        if (newlyLoaded is { Count: > 0 })
+        {
+            DirectoryPageLoaded?.Invoke(directory, newlyLoaded);
+        }
+
+        return true;
     }
 
     public bool TryGetPrefetchParent(FileSystemEntry entry, out FileSystemEntry? parent)
@@ -285,37 +464,50 @@ internal sealed class FileSystemTreeBuilder(IFileTreeService fileTree)
         return node;
     }
 
-    private DirectoryState EnsureState(FileSystemEntry directory)
+    private DirectoryState EnsureState(FileSystemEntry directory, out IReadOnlyList<FileSystemEntry>? newlyLoaded)
     {
         if (_states.TryGetValue(directory.FullPath, out var state))
         {
+            newlyLoaded = null;
             return state;
         }
 
-        state = new DirectoryState();
+        state = new DirectoryState(directory);
         _states[directory.FullPath] = state;
-        LoadPage(directory, state);
+        newlyLoaded = LoadPage(directory, state);
         return state;
     }
 
-    private void LoadPage(FileSystemEntry directory, DirectoryState state)
+    private IReadOnlyList<FileSystemEntry>? LoadPage(FileSystemEntry directory, DirectoryState state)
     {
         try
         {
-            var page = fileTree.GetChildrenPage(directory, state.Loaded.Count);
+            var page = fileTree.GetChildrenPage(directory, state.Loaded.Count, _sortOptions, _sizeProvider);
             state.Loaded.AddRange(page.Entries);
             state.HasMore = page.HasMore;
+
+            if (!state.HasMore && state.Loaded.Count > 1 &&
+                _sortOptions != FileTreeSortOptions.Default &&
+                (_sortOptions.Field == FileTreeSortField.Name || _sortOptions.Field == FileTreeSortField.Size))
+            {
+                // Ensures consistent ordering even when an IFileTreeService implementation
+                // uses the default interface fallback without custom sorting.
+                state.Loaded.Sort(new FileSystemEntryComparer(_sortOptions, getSizeBytes: _sizeProvider));
+            }
 
             foreach (var child in page.Entries)
             {
                 _parentByChild[child.FullPath] = directory;
             }
+
+            return page.Entries;
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
             or SecurityException)
         {
             state.HasMore = false;
+            return null;
         }
     }
 }

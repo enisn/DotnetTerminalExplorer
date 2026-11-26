@@ -243,4 +243,114 @@ public sealed class FileTreeServiceTests
 
         Assert.Throws<InvalidOperationException>(() => service.GetChildren(outsideEntry));
     }
+
+    [Fact]
+    public void GetChildren_SortsByNameDescending_KeepingDirectoriesFirst()
+    {
+        using var directory = new TemporaryDirectory();
+        directory.CreateFile("alpha.txt");
+        directory.CreateFile("beta.txt");
+        directory.CreateDirectory("echo");
+        directory.CreateDirectory("zulu");
+        var service = new FileTreeService(directory.Path);
+
+        var children = service.GetChildren(
+            service.Root,
+            new FileTreeSortOptions(FileTreeSortField.Name, FileTreeSortDirection.Descending));
+
+        Assert.Equal(["zulu", "echo", "beta.txt", "alpha.txt"], children.Select(e => e.Name));
+    }
+
+    [Fact]
+    public void GetChildren_SortsByModifiedDate_KeepingDirectoriesFirst()
+    {
+        using var directory = new TemporaryDirectory();
+        var oldFile = directory.CreateFile("old.txt");
+        var newFile = directory.CreateFile("new.txt");
+        var oldDir = directory.CreateDirectory("old-dir");
+        var newDir = directory.CreateDirectory("new-dir");
+
+        var timestamps = new Dictionary<string, DateTime?>
+        {
+            [oldDir] = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            [newDir] = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            [oldFile] = new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+            [newFile] = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        var service = new FileTreeService(
+            directory.Path,
+            Directory.EnumerateFileSystemEntries,
+            File.GetAttributes,
+            getLastWriteTimeUtc: p => timestamps.GetValueOrDefault(p));
+
+        var newestFirst = service.GetChildren(
+            service.Root,
+            new FileTreeSortOptions(FileTreeSortField.Modified, FileTreeSortDirection.Descending));
+        Assert.Equal(["new-dir", "old-dir", "new.txt", "old.txt"], newestFirst.Select(e => e.Name));
+
+        var oldestFirst = service.GetChildren(
+            service.Root,
+            new FileTreeSortOptions(FileTreeSortField.Modified, FileTreeSortDirection.Ascending));
+        Assert.Equal(["old-dir", "new-dir", "old.txt", "new.txt"], oldestFirst.Select(e => e.Name));
+    }
+
+    [Fact]
+    public void GetChildren_SortsBySize_UsesProviderForDirsAndPlacesUnknownAfterKnown()
+    {
+        using var directory = new TemporaryDirectory();
+        directory.CreateFile("small.txt", new string('a', 10));
+        directory.CreateFile("large.txt", new string('b', 1000));
+        var bigDir = directory.CreateDirectory("big-dir");
+        var smallDir = directory.CreateDirectory("small-dir");
+        directory.CreateDirectory("unknown-dir");
+
+        var dirSizes = new Dictionary<string, long>
+        {
+            [bigDir] = 9000,
+            [smallDir] = 100,
+        };
+
+        var service = new FileTreeService(directory.Path);
+
+        var largestFirst = service.GetChildren(
+            service.Root,
+            new FileTreeSortOptions(FileTreeSortField.Size, FileTreeSortDirection.Descending),
+            sizeProvider: e => dirSizes.TryGetValue(e.FullPath, out var bytes) ? bytes : null);
+
+        Assert.Equal(
+            ["big-dir", "small-dir", "unknown-dir", "large.txt", "small.txt"],
+            largestFirst.Select(e => e.Name));
+
+        var smallestFirst = service.GetChildren(
+            service.Root,
+            new FileTreeSortOptions(FileTreeSortField.Size, FileTreeSortDirection.Ascending),
+            sizeProvider: e => dirSizes.TryGetValue(e.FullPath, out var bytes) ? bytes : null);
+
+        Assert.Equal(
+            ["small-dir", "big-dir", "unknown-dir", "small.txt", "large.txt"],
+            smallestFirst.Select(e => e.Name));
+    }
+
+    [Fact]
+    public void DefaultSort_DoesNotQueryLastWriteTimeOrFileSize()
+    {
+        using var directory = new TemporaryDirectory();
+        directory.CreateFile("a.txt", "abc");
+        directory.CreateDirectory("sub");
+        var modifiedCalls = 0;
+        var sizeCalls = 0;
+
+        var service = new FileTreeService(
+            directory.Path,
+            Directory.EnumerateFileSystemEntries,
+            File.GetAttributes,
+            getLastWriteTimeUtc: _ => { modifiedCalls++; return DateTime.UtcNow; },
+            getFileSize: _ => { sizeCalls++; return 1; });
+
+        _ = service.GetChildrenPage(service.Root, skip: 0, FileTreeSortOptions.Default);
+
+        Assert.Equal(0, modifiedCalls);
+        Assert.Equal(0, sizeCalls);
+    }
 }

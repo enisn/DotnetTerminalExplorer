@@ -82,7 +82,9 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 
 | Shortcut | Action |
 | --- | --- |
-| `F1` | Show the Keyboard Shortcuts & Help dialog |
+| `Ctrl+P` / `:` | Open the searchable Command Menu (every action, sort, size mode, and layout control; `:` in tree) |
+| `,` | Open View & Sort Settings modal (Sort By, Order, Lazy Folder Sizes, Panel Width; in tree) |
+| `F1` | Show the Keyboard Shortcuts & Help dialog (includes a button to open the Command Menu) |
 | `Enter` | Expand directory / Focus editor for text files (when tree focused) |
 | `Tab` | Switch focus between Files tree and Preview editor |
 | `Ctrl+F` / `F3` | Find in active file (if editor focused) or Workspace Search (if tree focused) |
@@ -90,18 +92,22 @@ Use `dte --help` or `dte --version` without initializing Terminal.Gui or filesys
 | `Ctrl+Shift+F` | Workspace Search across all files (Ripgrep speed) |
 | `F3` / `Enter` | Next match in find bar |
 | `Shift+F3` / `Shift+Enter` | Previous match in find bar |
-| `Alt+Left` / `Alt+[` | Shrink the left Files panel width |
-| `Alt+Right` / `Alt+]` | Expand the left Files panel width |
+| `<` / `Alt+Left` / `Alt+[` | Shrink the left Files panel width (`<` in tree works without `Alt`) |
+| `>` / `Alt+Right` / `Alt+]` | Expand the left Files panel width (`>` in tree works without `Alt`) |
 | `F5` | Reload the selected file |
 | `Ctrl+S` | Save changes to the active file |
 | `Ctrl+L` | Load a large or binary file as text on demand |
 | `Ctrl+N` | Create a new file in the selected directory |
 | `Right` / `Ctrl+Right` | Expand the selected directory (one level) |
 | `F2` | Rename the selected file or directory inline |
-| `Del` | Delete the selected file or directory (asks for confirmation) |
+| `Del` / `Backspace` | Delete the selected file or directory (`Backspace` in tree; also available in Command Menu) |
 | `F8` | Open the selected file with the operating system's default application |
 | `Alt+X` | Clear an applied search filter from the file tree |
 | `Esc` | Return to file tree (if editor focused) / Quit with confirmation (if tree focused) |
+
+Every shortcut action is also accessible through the searchable **Command Menu** (`Ctrl+P` anywhere, `:` in the file tree, or via the StatusBar `Menu` item / `F1` Help dialog), making every operation usable even over SSH, web consoles, or macOS terminals where `Del`, `Alt`, or `F`-keys are unavailable or intercepted.
+
+Sorting (by **Name**, **Modified Date**, or **Size**, ascending or descending) and opt-in **Folder & File Sizes** are available via the Command Menu or **View & Sort Settings** (`,`). Size calculation is disabled by default so directory listing never blocks; when enabled, entries render immediately while visible folder sizes calculate lazily in the background (skipping symlink loops and tolerating inaccessible paths) and re-sort smoothly as results arrive.
 
 `Ctrl+F` / `F3` is context-aware: pressing it while focused on the editor opens an in-editor find bar with instant match navigation (`Enter`/`F3` for next, `Shift+Enter`/`Shift+F3` for previous, `Alt+C` for case sensitivity); pressing it while focused on the file tree (or pressing `Ctrl+Shift+F` anytime) opens a ripgrep-grade workspace search modal streaming matches asynchronously across the repository with GitIgnore filtering, regex support, and file/content mode toggles.
 
