@@ -31,7 +31,7 @@ jobs:
             archive: tar.gz
             binary: DotnetTerminalExplorer
           - rid: osx-arm64
-            os: macos-14
+            os: macos-15
             archive: tar.gz
             binary: DotnetTerminalExplorer
           - rid: win-x64
